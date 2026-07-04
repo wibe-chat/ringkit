@@ -13,7 +13,18 @@ interface CoreTrace {
     }
 }
 
-/** In-memory bounded trace (used by tests; the M2 RingLog sink replaces it). */
+/**
+ * Production trace (M2): every trace lands in the bounded §11.4 ring-trace
+ * buffer (surfaced by diagnose()) AND the always-on RingLog sink (§11.5).
+ */
+class SinkTrace(private val ringLog: RingLog, val buffer: RecordingTrace = RecordingTrace()) : CoreTrace {
+    override fun trace(tag: String, callId: String?, message: String) {
+        buffer.trace(tag, callId, message)
+        ringLog.log(CoreLogLevel.INFO, tag, "CoreTrace", callId, message)
+    }
+}
+
+/** In-memory bounded trace — the 50-entry §11.4 ring-trace buffer (also used bare in tests). */
 class RecordingTrace : CoreTrace {
     data class Entry(val tag: String, val callId: String?, val message: String)
 

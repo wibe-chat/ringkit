@@ -20,11 +20,33 @@ object RingKitCore {
         val time: TimeSource = RealTimeSource(appContext)
         val store: CoreStore = CoreStore.open(appContext)
         val writer: WriterExecutor = WriterExecutor()
-        val repository: CallRepository = CallRepository.open(store, time)
 
-        /** M2 wires real probes (NotificationManager, service liveness). */
+        /** §11.5 always-on capture sink; level follows persisted config below. */
+        val ringLog: RingLog = RingLog.open(java.io.File(appContext.noBackupFilesDir, CoreStore.DIR_NAME), time)
+
+        /** §11.4 ring-trace buffer + sink tee; the repository traces through it. */
+        val trace: SinkTrace = SinkTrace(ringLog)
+
+        val repository: CallRepository = CallRepository.open(store, time, trace)
+
+        /** §8.6 in-process signalling (orchestrator publishes on the writer). */
+        val bus: CallBus = CallBus(ringLog)
+
+        /**
+         * Sweep probes (§8.10). notificationPresent is wired to the real
+         * NotificationManager by the orchestrator's init (ui/ owns the ids);
+         * ongoingServiceAlive stays `true` until OngoingCallService exists (M3)
+         * — a lie in the safe direction (never falsely sweeps ACTIVE calls).
+         */
         @Volatile
         var sweepEnv: SweepEnv = SweepEnv(notificationPresent = { true }, ongoingServiceAlive = true)
+
+        init {
+            ringLog.level = repository.currentConfig().logLevel
+            writer.onUncaught = { t ->
+                ringLog.incident(RingLog.IncidentType.BOUNDARY_EXCEPTION, "WriterExecutor.post", null, throwable = t)
+            }
+        }
     }
 
     fun get(context: Context): Instance {

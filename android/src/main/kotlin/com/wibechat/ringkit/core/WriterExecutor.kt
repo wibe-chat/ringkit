@@ -22,13 +22,17 @@ class WriterExecutor internal constructor(private val executor: ExecutorService)
         },
     )
 
-    /** Fire-and-forget enqueue; exceptions are contained (logged by the M2 sink). */
+    /** §11.5 catch-log-degrade hook — RingKitCore points this at the RingLog sink. */
+    @Volatile
+    var onUncaught: ((Throwable) -> Unit)? = null
+
+    /** Fire-and-forget enqueue; exceptions are contained (never kill the writer thread). */
     fun post(block: () -> Unit) {
         executor.execute {
             try {
                 block()
             } catch (t: Throwable) {
-                // Never kill the writer thread; §11.5 catch-log-degrade lands in M2.
+                onUncaught?.invoke(t)
             }
         }
     }

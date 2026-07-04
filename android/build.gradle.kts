@@ -70,6 +70,13 @@ kotlin {
 }
 
 dependencies {
+    // PLAN §13 native-dep allowlist. NOT 1.19.x: androidx.core 1.19.0 requires
+    // compileSdk 37 + AGP 9.1 (verified empirically 2026-07-05) — our toolchain
+    // pins compileSdk 36 / AGP 9.0.1 (Flutter 3.44 template). CallStyle compat
+    // has been in core since 1.5; the 1.19 promoted-notification APIs are the
+    // Phase-4 Android 16 polish. Revisit with the toolchain bump.
+    implementation("androidx.core:core-ktx:1.17.0")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.15.1")
     testImplementation("androidx.test:core:1.7.0")
