@@ -1,0 +1,88 @@
+# SCOPE-1 M0 CI skeleton: format → analyze (fatal-infos) → Dart tests →
+# Robolectric (generated §5.1/§7.5 suites). Emulator integration jobs land in
+# M2/M3; AGP-8.x + no-Firebase consumer jobs land with the scope exit checklist.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  guards:
+    name: architecture guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Golden rule (PLAN §4.1/§13.2): core/ never imports Flutter classes —
+      # that seam is what keeps every flow cold-process-safe (R1) and
+      # Robolectric-testable. Fail loudly on the first violation.
+      - name: core/ has zero Flutter imports
+        run: |
+          if grep -rn "io\.flutter" android/src/main/kotlin/com/wibechat/ringkit/core/; then
+            echo "::error::Flutter import found under core/ — forbidden (PLAN §4.1)"
+            exit 1
+          fi
+      # KGP-free build (PLAN §13.1): the plugin must never apply the Kotlin
+      # Android Gradle plugin — AGP 9 Built-in Kotlin only (R27).
+      - name: plugin build is KGP-free
+        run: |
+          if grep -n 'id("org.jetbrains.kotlin.android")' android/build.gradle.kts; then
+            echo "::error::org.jetbrains.kotlin.android applied in plugin build — forbidden (PLAN §13.1)"
+            exit 1
+          fi
+      # Pigeon pin is exact (PLAN §13.1): a caret/range pin would let codegen drift.
+      - name: pigeon is exact-pinned
+        run: |
+          if ! grep -En "^  pigeon: [0-9]+\.[0-9]+\.[0-9]+$" pubspec.yaml; then
+            echo "::error::pigeon must be exact-pinned in pubspec.yaml (PLAN §13.1)"
+            exit 1
+          fi
+
+  dart:
+    name: format · analyze · dart tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: format (schema + lib + test)
+        run: dart format --output=none --set-exit-if-changed lib test pigeons
+      - name: pigeon outputs are committed & current
+        run: |
+          dart pub get
+          dart run pigeon --input pigeons/messages.dart
+          git diff --exit-code -- lib/src/messages.g.dart android/src/main/kotlin/com/wibechat/ringkit/adapter/Messages.g.kt
+      - name: analyze (zero infos tolerated — pana gate)
+        run: flutter analyze --fatal-infos
+      - name: dart unit tests
+        run: flutter test
+
+  robolectric:
+    name: robolectric (generated §5.1 + §7.5 suites, API sweep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: gradle/actions/setup-gradle@v4
+      - name: build example once (wires the plugin project)
+        run: |
+          flutter pub get
+          cd example && flutter build apk --debug
+      - name: run Robolectric suites
+        run: cd example/android && ./gradlew :ringkit:testDebugUnitTest --console=plain
+      - name: upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: robolectric-reports
+          path: android/build/reports/tests/

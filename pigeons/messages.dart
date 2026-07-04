@@ -13,14 +13,13 @@ import 'package:pigeon/pigeon.dart';
 @ConfigurePigeon(
   PigeonOptions(
     dartOut: 'lib/src/messages.g.dart',
-    kotlinOut: 'android/src/main/kotlin/com/wibechat/ringkit/adapter/Messages.g.kt',
+    kotlinOut:
+        'android/src/main/kotlin/com/wibechat/ringkit/adapter/Messages.g.kt',
     kotlinOptions: KotlinOptions(package: 'com.wibechat.ringkit.adapter'),
     dartPackageName: 'ringkit',
   ),
 )
-
 // ─────────────────────────────────────────────────────────────────── enums ──
-
 enum CallType { audio, video }
 
 enum CallDirection { incoming, outgoing }
@@ -106,7 +105,13 @@ enum FailReason {
   channelBlocked,
 }
 
-enum CallCommandResult { ok, notFound, wrongState, alreadyTerminal, invalidParams }
+enum CallCommandResult {
+  ok,
+  notFound,
+  wrongState,
+  alreadyTerminal,
+  invalidParams,
+}
 
 enum DiagnosticsSeverity { info, warning, error }
 

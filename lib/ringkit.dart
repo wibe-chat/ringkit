@@ -1,4 +1,3 @@
-
 import 'ringkit_platform_interface.dart';
 
 class Ringkit {
