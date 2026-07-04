@@ -40,6 +40,7 @@ class CoreStore internal constructor(private val baseDir: File) {
     private val seqFile = File(baseDir, "seq.json")
     private val registryFile = File(baseDir, "registry.json")
     private val launchActionFile = File(baseDir, "launch_action.json")
+    private val handlesFile = File(baseDir, "handles.json")
     private val countersFile = File(baseDir, "counters.json")
     private val lockFile = File(baseDir, "store.lock")
 
@@ -172,6 +173,22 @@ class CoreStore internal constructor(private val baseDir: File) {
         } else {
             writeEnvelope(launchActionFile, CoreJson.launchAction(action))
         }
+    }
+
+    // ── background callback handles (§10.4 — 64-bit longs, R-table) ──────
+
+    fun writeBackgroundHandles(dispatcherHandle: Long, handlerHandle: Long) {
+        writeEnvelope(
+            handlesFile,
+            org.json.JSONObject().put("dispatcher", dispatcherHandle).put("handler", handlerHandle),
+        )
+    }
+
+    /** Returns (dispatcherHandle, handlerHandle) or null if never registered. */
+    fun readBackgroundHandles(): Pair<Long, Long>? {
+        val data = readEnvelope(handlesFile) ?: return null
+        if (!data.has("dispatcher") || !data.has("handler")) return null
+        return data.optLong("dispatcher") to data.optLong("handler")
     }
 
     // ── counters (§8.10 bounds bookkeeping) ──────────────────────────────

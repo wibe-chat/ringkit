@@ -1,0 +1,175 @@
+package com.wibechat.ringkit.adapter
+
+import com.wibechat.ringkit.core.CoreDeliveryPath
+import com.wibechat.ringkit.core.RingKitCore
+import com.wibechat.ringkit.core.TransitionInput
+import com.wibechat.ringkit.core.TransitionResult
+
+/**
+ * Pigeon host-API implementation (PLAN §6.1, §8.9): every method hops to the
+ * single writer executor and replies through the async callback — the platform
+ * thread is never blocked. One instance exists per attached engine; ack calls
+ * from non-designated engines are ignored (§10.3 step 1).
+ *
+ * M1 scope: repository transitions + live event delivery. The §8.11
+ * precondition matrix, UI effects and services are the M2 orchestrator.
+ */
+internal class RingKitHostApiImpl(
+    private val core: RingKitCore.Instance,
+    private val engineId: Int,
+) : RingKitHostApi {
+
+    private fun <T> onWriter(callback: (Result<T>) -> Unit, block: () -> T) {
+        core.writer.submit(block) { result -> callback(result) }
+    }
+
+    /** Live-path delivery of this transition's events to the designated engine. */
+    private fun deliver(result: TransitionResult) {
+        val records =
+            (result.persistedEvents + result.liveEvents).map {
+                PigeonMapper.eventRecord(it, CoreDeliveryPath.LIVE)
+            }
+        EngineRegistry.emitToDesignated(records)
+    }
+
+    override fun initialize(config: RingKitConfig, callback: (Result<Unit>) -> Unit) =
+        onWriter(callback) {
+            core.repository.updateConfig(PigeonMapper.toCore(config))
+            Unit
+        }
+
+    override fun showIncomingCall(call: IncomingCall, callback: (Result<ShowCallResult>) -> Unit) =
+        onWriter(callback) {
+            val result = core.repository.dispatch(TransitionInput.Show(PigeonMapper.toCore(call)))
+            deliver(result)
+            PigeonMapper.showResult(result.outcome)
+        }
+
+    override fun acceptCall(callId: String, callback: (Result<CallCommandResult>) -> Unit) =
+        onWriter(callback) {
+            // Programmatic accept (§4.3): same native path, no launch action.
+            val result = core.repository.dispatch(TransitionInput.Accept(callId, fromAction = false))
+            deliver(result)
+            PigeonMapper.commandResult(result.outcome)
+        }
+
+    override fun declineCall(callId: String, callback: (Result<CallCommandResult>) -> Unit) =
+        onWriter(callback) {
+            val result = core.repository.dispatch(TransitionInput.Decline(callId))
+            deliver(result)
+            PigeonMapper.commandResult(result.outcome)
+        }
+
+    override fun endCall(callId: String, reason: EndReason, callback: (Result<CallCommandResult>) -> Unit) =
+        onWriter(callback) {
+            val result =
+                core.repository.dispatch(TransitionInput.End(callId, PigeonMapper.endReasonToCore(reason)))
+            deliver(result)
+            PigeonMapper.commandResult(result.outcome)
+        }
+
+    override fun cancelCall(callId: String, reason: CancelReason, callback: (Result<CallCommandResult>) -> Unit) =
+        onWriter(callback) {
+            val result =
+                core.repository.dispatch(TransitionInput.Cancel(callId, PigeonMapper.cancelReasonToCore(reason)))
+            deliver(result)
+            PigeonMapper.commandResult(result.outcome)
+        }
+
+    override fun endAllCalls(callback: (Result<Unit>) -> Unit) =
+        onWriter(callback) {
+            val result = core.repository.dispatch(TransitionInput.EndAll)
+            deliver(result)
+            Unit
+        }
+
+    override fun setCallConnected(callId: String, callback: (Result<CallCommandResult>) -> Unit) =
+        onWriter(callback) {
+            val result = core.repository.dispatch(TransitionInput.SetConnected(callId))
+            deliver(result)
+            PigeonMapper.commandResult(result.outcome)
+        }
+
+    override fun startOutgoingCall(call: OutgoingCall, callback: (Result<ShowCallResult>) -> Unit) =
+        onWriter(callback) {
+            val result = core.repository.dispatch(TransitionInput.StartOutgoing(PigeonMapper.toCore(call)))
+            deliver(result)
+            PigeonMapper.showResult(result.outcome)
+        }
+
+    override fun updateCallInfo(
+        callId: String,
+        update: CallInfoUpdate,
+        callback: (Result<CallCommandResult>) -> Unit,
+    ) =
+        onWriter(callback) {
+            val result =
+                core.repository.dispatch(TransitionInput.UpdateInfo(callId, PigeonMapper.toCore(update)))
+            deliver(result)
+            PigeonMapper.commandResult(result.outcome)
+        }
+
+    override fun setAudioRoute(route: AudioRoute, callback: (Result<CallCommandResult>) -> Unit) =
+        onWriter(callback) {
+            // Telecom module only (§6.1); flag-gated behavior lands in Phase 4.
+            CallCommandResult.WRONG_STATE
+        }
+
+    override fun activeCalls(callback: (Result<List<ActiveCall>>) -> Unit) =
+        onWriter(callback) {
+            core.repository.activeCalls().map { PigeonMapper.activeCall(it) }
+        }
+
+    override fun takePendingEvents(callback: (Result<List<CallEventRecord>>) -> Unit) =
+        onWriter(callback) {
+            core.repository.eventLog.takePending().map {
+                PigeonMapper.eventRecord(it, CoreDeliveryPath.REPLAYED)
+            }
+        }
+
+    override fun ackEvents(upToSeq: Long, deliveredSequences: List<Long>, callback: (Result<Unit>) -> Unit) =
+        onWriter(callback) {
+            // §10.3: exactly one engine consumes — foreign acks can never
+            // silently eat events the designated stream hasn't seen.
+            if (EngineRegistry.isDesignated(engineId)) {
+                core.repository.eventLog.ack(upToSeq, deliveredSequences)
+            }
+            Unit
+        }
+
+    override fun consumeLaunchAction(callback: (Result<CallLaunchAction?>) -> Unit) =
+        onWriter(callback) {
+            core.repository.consumeLaunchAction()?.let { PigeonMapper.launchAction(it) }
+        }
+
+    override fun registerBackgroundEventHandler(
+        dispatcherHandle: Long,
+        handlerHandle: Long,
+        callback: (Result<Unit>) -> Unit,
+    ) =
+        onWriter(callback) {
+            // Persisted as 64-bit longs (§10.4); the headless runner reads them in M3.
+            core.store.writeBackgroundHandles(dispatcherHandle, handlerHandle)
+        }
+
+    override fun diagnose(callback: (Result<DiagnosticsReport>) -> Unit) =
+        onWriter(callback) {
+            // Diagnostics v1 lands in M3 (§11.3); this is the honest M1 subset.
+            val log = core.repository.eventLog
+            DiagnosticsReport(
+                findings = emptyList(),
+                eventLogHealth =
+                    EventLogHealth(
+                        sizeBytes = 0L,
+                        unconsumedCount = log.unconsumedCount().toLong(),
+                        droppedEvents = log.droppedCount().toLong(),
+                        quarantinedEntries = core.store.quarantinedCount.toLong(),
+                        activeLeases = log.activeLeaseCount().toLong(),
+                    ),
+                lastShowResult = null,
+                lastDeliveryPath = null,
+                ringTraces = emptyList(),
+                generatedAtEpochMs = core.time.wallMs(),
+            )
+        }
+}
