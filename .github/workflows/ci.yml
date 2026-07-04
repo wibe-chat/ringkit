@@ -51,9 +51,12 @@ jobs:
       - name: format (schema + lib + test)
         run: dart format --output=none --set-exit-if-changed lib test pigeons
       - name: pigeon outputs are committed & current
+        # Pigeon's Dart output is not dart-format-clean; the repo convention is
+        # regen → format → commit, so CI reproduces exactly that before diffing.
         run: |
           dart pub get
           dart run pigeon --input pigeons/messages.dart
+          dart format lib/src/messages.g.dart
           git diff --exit-code -- lib/src/messages.g.dart android/src/main/kotlin/com/wibechat/ringkit/adapter/Messages.g.kt
       - name: analyze (zero infos tolerated — pana gate)
         run: flutter analyze --fatal-infos
