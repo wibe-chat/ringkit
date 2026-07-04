@@ -74,4 +74,7 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.15.1")
     testImplementation("androidx.test:core:1.7.0")
     testImplementation("org.jetbrains.kotlin:kotlin-test")
+    // Real org.json for code that runs OUTSIDE the Robolectric sandbox (the
+    // parameterized suites' @Parameters loaders); android.jar stubs throw there.
+    testImplementation("org.json:json:20250517")
 }

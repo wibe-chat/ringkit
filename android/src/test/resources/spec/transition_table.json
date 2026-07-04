@@ -1,0 +1,605 @@
+{
+  "spec": "PLAN.md §5.1 full transition table (v1.3.1, 2026-07-05)",
+  "notes": [
+    "NORMATIVE DATA. One generated Robolectric test per case (CLAUDE.md rule):",
+    "never change CallRepository behavior without updating this table in the same commit.",
+    "'zero': true asserts the §5.1 zero-side-effect rule — no events, no effects,",
+    "no artifact mutation, no state change. The 'tombstone' column covers both",
+    "tombstones and pre-tombstones via given.variant."
+  ],
+  "states": ["none", "RINGING", "ACCEPTED", "ACTIVE", "OUTGOING", "tombstone"],
+  "inputs": [
+    "show", "accept", "decline", "timeout", "cancel", "endRemote", "endLocal",
+    "endFailed", "setConnected", "startOutgoing", "updateInfo", "endAll",
+    "watchdog", "taskRemoved", "sweep"
+  ],
+  "cells": [
+    {
+      "input": "show", "state": "none",
+      "cases": [
+        {"name": "fresh", "expect": {"outcome": "SHOWN", "callState": "RINGING", "liveEvents": [{"type": "RINGING"}], "effects": ["RING"]}},
+        {"name": "stale_records_timed_out_never_rings", "given": {"stale": true}, "expect": {"outcome": "EXPIRED", "callState": null, "events": [{"type": "TIMED_OUT"}], "effects": ["MISSED_CALL"], "tombstone": true}},
+        {"name": "future_sent_at_clamps_to_fresh", "given": {"futureSentAt": true}, "expect": {"outcome": "SHOWN", "callState": "RINGING", "liveEvents": [{"type": "RINGING"}], "effects": ["RING"]}},
+        {"name": "blank_id_invalid_params", "given": {"idKind": "blank"}, "expect": {"outcome": "INVALID_PARAMS", "zero": true}},
+        {"name": "overlength_id_invalid_params", "given": {"idKind": "overlength"}, "expect": {"outcome": "INVALID_PARAMS", "zero": true}},
+        {"name": "oversize_extra_invalid_params", "given": {"extraOverLimit": true}, "expect": {"outcome": "INVALID_PARAMS", "zero": true}},
+        {"name": "blank_caller_name_placeholder", "given": {"blankName": true}, "expect": {"outcome": "SHOWN", "callState": "RINGING", "liveEvents": [{"type": "RINGING"}], "effects": ["RING"], "recordAssert": {"name": "Unknown caller"}}},
+        {"name": "bad_avatar_scheme_ignored_show_proceeds", "given": {"badAvatarScheme": true}, "expect": {"outcome": "SHOWN", "callState": "RINGING", "liveEvents": [{"type": "RINGING"}], "effects": ["RING"], "recordAssert": {"avatarUrlNull": true}}}
+      ]
+    },
+    {
+      "input": "show", "state": "RINGING",
+      "cases": [
+        {"name": "redelivery_already_shown", "expect": {"outcome": "ALREADY_SHOWN", "callState": "RINGING", "zero": true}}
+      ]
+    },
+    {
+      "input": "show", "state": "ACCEPTED",
+      "cases": [
+        {"name": "already_active", "expect": {"outcome": "ALREADY_ACTIVE", "callState": "ACCEPTED", "zero": true}}
+      ]
+    },
+    {
+      "input": "show", "state": "ACTIVE",
+      "cases": [
+        {"name": "already_active", "expect": {"outcome": "ALREADY_ACTIVE", "callState": "ACTIVE", "zero": true}}
+      ]
+    },
+    {
+      "input": "show", "state": "OUTGOING",
+      "cases": [
+        {"name": "already_active", "expect": {"outcome": "ALREADY_ACTIVE", "callState": "OUTGOING", "zero": true}}
+      ]
+    },
+    {
+      "input": "show", "state": "tombstone",
+      "cases": [
+        {"name": "tombstone_never_rerings", "expect": {"outcome": "ALREADY_TERMINAL", "callState": null, "zero": true}},
+        {"name": "pre_tombstone_never_rings_r41", "given": {"variant": "preTombstone"}, "expect": {"outcome": "ALREADY_TERMINAL", "callState": null, "zero": true}},
+        {"name": "expired_tombstone_rings_again_ttl", "given": {"variant": "expiredTombstone"}, "expect": {"outcome": "SHOWN", "callState": "RINGING", "liveEvents": [{"type": "RINGING"}], "effects": ["RING"]}}
+      ]
+    },
+
+    {
+      "input": "accept", "state": "none",
+      "cases": [
+        {"name": "not_found", "given": {"fromAction": true}, "expect": {"outcome": "NOT_FOUND", "zero": true}}
+      ]
+    },
+    {
+      "input": "accept", "state": "RINGING",
+      "cases": [
+        {"name": "from_action_sets_launch_action", "given": {"fromAction": true}, "expect": {"outcome": "OK", "callState": "ACCEPTED", "events": [{"type": "ACCEPTED"}], "effects": ["STOP_RING", "DEMOTE_OTHERS", "CONNECTING_SURFACE", "ARM_WATCHDOG", "LAUNCH_APP"], "launchAction": {"type": "ACCEPTED", "alreadyEnded": false}}},
+        {"name": "programmatic_no_launch_action", "given": {"fromAction": false}, "expect": {"outcome": "OK", "callState": "ACCEPTED", "events": [{"type": "ACCEPTED"}], "effects": ["STOP_RING", "DEMOTE_OTHERS", "CONNECTING_SURFACE", "ARM_WATCHDOG"], "launchAction": null}}
+      ]
+    },
+    {
+      "input": "accept", "state": "ACCEPTED",
+      "cases": [
+        {"name": "double_fire_idempotent_single_event", "given": {"fromAction": true}, "expect": {"outcome": "OK", "callState": "ACCEPTED", "zero": true, "logAssert": {"typeCount": {"type": "ACCEPTED", "count": 1}}}}
+      ]
+    },
+    {
+      "input": "accept", "state": "ACTIVE",
+      "cases": [
+        {"name": "wrong_state", "given": {"fromAction": true}, "expect": {"outcome": "WRONG_STATE", "callState": "ACTIVE", "zero": true}}
+      ]
+    },
+    {
+      "input": "accept", "state": "OUTGOING",
+      "cases": [
+        {"name": "wrong_state", "given": {"fromAction": true}, "expect": {"outcome": "WRONG_STATE", "callState": "OUTGOING", "zero": true}}
+      ]
+    },
+    {
+      "input": "accept", "state": "tombstone",
+      "cases": [
+        {"name": "raced_cancel_launches_already_ended", "given": {"fromAction": true}, "expect": {"outcome": "ALREADY_TERMINAL", "callState": null, "events": [], "effects": ["TEARDOWN_UI", "LAUNCH_APP"], "launchAction": {"alreadyEnded": true, "seqIsWinningTerminal": true}}},
+        {"name": "programmatic_already_terminal_no_launch", "given": {"fromAction": false}, "expect": {"outcome": "ALREADY_TERMINAL", "callState": null, "events": [], "effects": ["TEARDOWN_UI"], "launchAction": null}},
+        {"name": "pre_tombstone_already_terminal", "given": {"variant": "preTombstone", "fromAction": false}, "expect": {"outcome": "ALREADY_TERMINAL", "zero": true}}
+      ]
+    },
+
+    {
+      "input": "decline", "state": "none",
+      "cases": [
+        {"name": "not_found", "expect": {"outcome": "NOT_FOUND", "zero": true}}
+      ]
+    },
+    {
+      "input": "decline", "state": "RINGING",
+      "cases": [
+        {"name": "declines_no_missed_call_no_launch", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "DECLINED"}], "effects": ["STOP_RING", "TEARDOWN_UI"], "tombstone": true, "launchAction": null}}
+      ]
+    },
+    {
+      "input": "decline", "state": "ACCEPTED",
+      "cases": [
+        {"name": "wrong_state", "expect": {"outcome": "WRONG_STATE", "callState": "ACCEPTED", "zero": true}}
+      ]
+    },
+    {
+      "input": "decline", "state": "ACTIVE",
+      "cases": [
+        {"name": "wrong_state", "expect": {"outcome": "WRONG_STATE", "callState": "ACTIVE", "zero": true}}
+      ]
+    },
+    {
+      "input": "decline", "state": "OUTGOING",
+      "cases": [
+        {"name": "wrong_state", "expect": {"outcome": "WRONG_STATE", "callState": "OUTGOING", "zero": true}}
+      ]
+    },
+    {
+      "input": "decline", "state": "tombstone",
+      "cases": [
+        {"name": "stale_pending_intent_post_sweep", "expect": {"outcome": "ALREADY_TERMINAL", "zero": true}}
+      ]
+    },
+
+    {
+      "input": "timeout", "state": "none",
+      "cases": [
+        {"name": "unknown_defensive_noop", "expect": {"outcome": "NO_OP", "zero": true}}
+      ]
+    },
+    {
+      "input": "timeout", "state": "RINGING",
+      "cases": [
+        {"name": "times_out_with_missed_call", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "TIMED_OUT"}], "effects": ["STOP_RING", "TEARDOWN_UI", "MISSED_CALL"], "tombstone": true}},
+        {"name": "missed_call_disabled_per_call", "given": {"arrange": {"missedCallShow": false}}, "expect": {"outcome": "OK", "callState": null, "events": [{"type": "TIMED_OUT"}], "effects": ["STOP_RING", "TEARDOWN_UI"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "timeout", "state": "ACCEPTED",
+      "cases": [
+        {"name": "stale_timer_noop_watchdog_covers", "expect": {"outcome": "NO_OP", "callState": "ACCEPTED", "zero": true}}
+      ]
+    },
+    {
+      "input": "timeout", "state": "ACTIVE",
+      "cases": [
+        {"name": "stale_timer_noop", "expect": {"outcome": "NO_OP", "callState": "ACTIVE", "zero": true}}
+      ]
+    },
+    {
+      "input": "timeout", "state": "OUTGOING",
+      "cases": [
+        {"name": "stale_timer_noop", "expect": {"outcome": "NO_OP", "callState": "OUTGOING", "zero": true}}
+      ]
+    },
+    {
+      "input": "timeout", "state": "tombstone",
+      "cases": [
+        {"name": "idempotent", "expect": {"outcome": "ALREADY_TERMINAL", "zero": true}}
+      ]
+    },
+
+    {
+      "input": "cancel", "state": "none",
+      "cases": [
+        {"name": "out_of_order_writes_pre_tombstone", "given": {"reason": "CALLER_CANCELLED"}, "expect": {"outcome": "NOT_FOUND", "preTombstone": true, "events": [], "effects": []}}
+      ]
+    },
+    {
+      "input": "cancel", "state": "RINGING",
+      "cases": [
+        {"name": "caller_cancelled", "given": {"reason": "CALLER_CANCELLED"}, "expect": {"outcome": "OK", "callState": null, "events": [{"type": "CANCELLED", "cancelReason": "CALLER_CANCELLED"}], "effects": ["STOP_RING", "TEARDOWN_UI", "MISSED_CALL"], "tombstone": true}},
+        {"name": "answered_elsewhere", "given": {"reason": "ANSWERED_ELSEWHERE"}, "expect": {"outcome": "OK", "callState": null, "events": [{"type": "CANCELLED", "cancelReason": "ANSWERED_ELSEWHERE"}], "effects": ["STOP_RING", "TEARDOWN_UI", "MISSED_CALL"], "tombstone": true}},
+        {"name": "declined_elsewhere", "given": {"reason": "DECLINED_ELSEWHERE"}, "expect": {"outcome": "OK", "callState": null, "events": [{"type": "CANCELLED", "cancelReason": "DECLINED_ELSEWHERE"}], "effects": ["STOP_RING", "TEARDOWN_UI", "MISSED_CALL"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "cancel", "state": "ACCEPTED",
+      "cases": [
+        {"name": "local_accept_wins_ignored_traced", "given": {"reason": "CALLER_CANCELLED"}, "expect": {"outcome": "WRONG_STATE", "callState": "ACCEPTED", "zero": true}}
+      ]
+    },
+    {
+      "input": "cancel", "state": "ACTIVE",
+      "cases": [
+        {"name": "ignored_traced", "given": {"reason": "CALLER_CANCELLED"}, "expect": {"outcome": "WRONG_STATE", "callState": "ACTIVE", "zero": true}}
+      ]
+    },
+    {
+      "input": "cancel", "state": "OUTGOING",
+      "cases": [
+        {"name": "remote_ends_outgoing", "given": {"reason": "CALLER_CANCELLED"}, "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "REMOTE"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "cancel", "state": "tombstone",
+      "cases": [
+        {"name": "idempotent_already_terminal", "given": {"reason": "CALLER_CANCELLED"}, "expect": {"outcome": "ALREADY_TERMINAL", "zero": true}},
+        {"name": "pre_tombstone_idempotent", "given": {"variant": "preTombstone", "reason": "CALLER_CANCELLED"}, "expect": {"outcome": "ALREADY_TERMINAL", "zero": true}}
+      ]
+    },
+
+    {
+      "input": "endRemote", "state": "none",
+      "cases": [
+        {"name": "not_found_no_pre_tombstone", "expect": {"outcome": "NOT_FOUND", "preTombstone": false, "zero": true}}
+      ]
+    },
+    {
+      "input": "endRemote", "state": "RINGING",
+      "cases": [
+        {"name": "maps_to_cancelled_caller_cancelled", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "CANCELLED", "cancelReason": "CALLER_CANCELLED"}], "effects": ["STOP_RING", "TEARDOWN_UI", "MISSED_CALL"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endRemote", "state": "ACCEPTED",
+      "cases": [
+        {"name": "far_end_hangup", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "REMOTE"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endRemote", "state": "ACTIVE",
+      "cases": [
+        {"name": "far_end_hangup", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "REMOTE"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endRemote", "state": "OUTGOING",
+      "cases": [
+        {"name": "far_end_hangup", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "REMOTE"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endRemote", "state": "tombstone",
+      "cases": [
+        {"name": "already_terminal", "expect": {"outcome": "ALREADY_TERMINAL", "zero": true}}
+      ]
+    },
+
+    {
+      "input": "endLocal", "state": "none",
+      "cases": [
+        {"name": "not_found", "expect": {"outcome": "NOT_FOUND", "zero": true}}
+      ]
+    },
+    {
+      "input": "endLocal", "state": "RINGING",
+      "cases": [
+        {"name": "local_dismiss_no_missed_call", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "CANCELLED", "cancelReason": "LOCAL_DISMISS"}], "effects": ["STOP_RING", "TEARDOWN_UI"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endLocal", "state": "ACCEPTED",
+      "cases": [
+        {"name": "ends_local", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "LOCAL"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endLocal", "state": "ACTIVE",
+      "cases": [
+        {"name": "ends_local", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "LOCAL"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endLocal", "state": "OUTGOING",
+      "cases": [
+        {"name": "ends_local", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "LOCAL"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endLocal", "state": "tombstone",
+      "cases": [
+        {"name": "already_terminal", "expect": {"outcome": "ALREADY_TERMINAL", "zero": true}}
+      ]
+    },
+
+    {
+      "input": "endFailed", "state": "none",
+      "cases": [
+        {"name": "not_found", "expect": {"outcome": "NOT_FOUND", "zero": true}}
+      ]
+    },
+    {
+      "input": "endFailed", "state": "RINGING",
+      "cases": [
+        {"name": "maps_to_local_dismiss", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "CANCELLED", "cancelReason": "LOCAL_DISMISS"}], "effects": ["STOP_RING", "TEARDOWN_UI"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endFailed", "state": "ACCEPTED",
+      "cases": [
+        {"name": "ends_failed", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "FAILED"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endFailed", "state": "ACTIVE",
+      "cases": [
+        {"name": "ends_failed", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "FAILED"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endFailed", "state": "OUTGOING",
+      "cases": [
+        {"name": "ends_failed", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "FAILED"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endFailed", "state": "tombstone",
+      "cases": [
+        {"name": "already_terminal", "expect": {"outcome": "ALREADY_TERMINAL", "zero": true}}
+      ]
+    },
+
+    {
+      "input": "setConnected", "state": "none",
+      "cases": [
+        {"name": "not_found", "expect": {"outcome": "NOT_FOUND", "zero": true}}
+      ]
+    },
+    {
+      "input": "setConnected", "state": "RINGING",
+      "cases": [
+        {"name": "wrong_state_points_at_accept", "expect": {"outcome": "WRONG_STATE", "callState": "RINGING", "zero": true}}
+      ]
+    },
+    {
+      "input": "setConnected", "state": "ACCEPTED",
+      "cases": [
+        {"name": "activates_cancels_watchdog", "expect": {"outcome": "OK", "callState": "ACTIVE", "events": [], "effects": ["CANCEL_WATCHDOG", "CHRONOMETER_START"], "recordAssert": {"connectionDeadlineCleared": true}}}
+      ]
+    },
+    {
+      "input": "setConnected", "state": "ACTIVE",
+      "cases": [
+        {"name": "idempotent_chronometer_base_unchanged", "expect": {"outcome": "OK", "callState": "ACTIVE", "zero": true, "recordAssert": {"connectedAtUnchanged": true}}}
+      ]
+    },
+    {
+      "input": "setConnected", "state": "OUTGOING",
+      "cases": [
+        {"name": "activates_cancels_watchdog", "expect": {"outcome": "OK", "callState": "ACTIVE", "events": [], "effects": ["CANCEL_WATCHDOG", "CHRONOMETER_START"], "recordAssert": {"connectionDeadlineCleared": true}}}
+      ]
+    },
+    {
+      "input": "setConnected", "state": "tombstone",
+      "cases": [
+        {"name": "already_terminal", "expect": {"outcome": "ALREADY_TERMINAL", "zero": true}}
+      ]
+    },
+
+    {
+      "input": "startOutgoing", "state": "none",
+      "cases": [
+        {"name": "starts_calling_surface_no_ring", "expect": {"outcome": "SHOWN", "callState": "OUTGOING", "events": [], "effects": ["CALLING_SURFACE", "ARM_WATCHDOG"]}},
+        {"name": "blank_id_invalid_params", "given": {"idKind": "blank"}, "expect": {"outcome": "INVALID_PARAMS", "zero": true}}
+      ]
+    },
+    {
+      "input": "startOutgoing", "state": "RINGING",
+      "cases": [
+        {"name": "already_active", "expect": {"outcome": "ALREADY_ACTIVE", "callState": "RINGING", "zero": true}}
+      ]
+    },
+    {
+      "input": "startOutgoing", "state": "ACCEPTED",
+      "cases": [
+        {"name": "already_active", "expect": {"outcome": "ALREADY_ACTIVE", "callState": "ACCEPTED", "zero": true}}
+      ]
+    },
+    {
+      "input": "startOutgoing", "state": "ACTIVE",
+      "cases": [
+        {"name": "already_active", "expect": {"outcome": "ALREADY_ACTIVE", "callState": "ACTIVE", "zero": true}}
+      ]
+    },
+    {
+      "input": "startOutgoing", "state": "OUTGOING",
+      "cases": [
+        {"name": "idempotent_already_shown", "expect": {"outcome": "ALREADY_SHOWN", "callState": "OUTGOING", "zero": true}}
+      ]
+    },
+    {
+      "input": "startOutgoing", "state": "tombstone",
+      "cases": [
+        {"name": "already_terminal", "expect": {"outcome": "ALREADY_TERMINAL", "zero": true}}
+      ]
+    },
+
+    {
+      "input": "updateInfo", "state": "none",
+      "cases": [
+        {"name": "not_found", "expect": {"outcome": "NOT_FOUND", "zero": true}}
+      ]
+    },
+    {
+      "input": "updateInfo", "state": "RINGING",
+      "cases": [
+        {"name": "silent_renotify", "expect": {"outcome": "OK", "callState": "RINGING", "events": [], "effects": ["SILENT_RENOTIFY"], "recordAssert": {"infoName": "Updated Name"}}}
+      ]
+    },
+    {
+      "input": "updateInfo", "state": "ACCEPTED",
+      "cases": [
+        {"name": "silent_renotify", "expect": {"outcome": "OK", "callState": "ACCEPTED", "events": [], "effects": ["SILENT_RENOTIFY"], "recordAssert": {"infoName": "Updated Name"}}}
+      ]
+    },
+    {
+      "input": "updateInfo", "state": "ACTIVE",
+      "cases": [
+        {"name": "silent_renotify", "expect": {"outcome": "OK", "callState": "ACTIVE", "events": [], "effects": ["SILENT_RENOTIFY"], "recordAssert": {"infoName": "Updated Name"}}}
+      ]
+    },
+    {
+      "input": "updateInfo", "state": "OUTGOING",
+      "cases": [
+        {"name": "silent_renotify", "expect": {"outcome": "OK", "callState": "OUTGOING", "events": [], "effects": ["SILENT_RENOTIFY"], "recordAssert": {"infoName": "Updated Name"}}}
+      ]
+    },
+    {
+      "input": "updateInfo", "state": "tombstone",
+      "cases": [
+        {"name": "already_terminal", "expect": {"outcome": "ALREADY_TERMINAL", "zero": true}}
+      ]
+    },
+
+    {
+      "input": "endAll", "state": "none",
+      "cases": [
+        {"name": "empty_noop", "expect": {"outcome": "OK", "events": [], "effects": []}}
+      ]
+    },
+    {
+      "input": "endAll", "state": "RINGING",
+      "cases": [
+        {"name": "cancels_local_dismiss_no_missed_call", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "CANCELLED", "cancelReason": "LOCAL_DISMISS"}], "effects": ["STOP_RING", "TEARDOWN_UI"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endAll", "state": "ACCEPTED",
+      "cases": [
+        {"name": "ends_local", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "LOCAL"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endAll", "state": "ACTIVE",
+      "cases": [
+        {"name": "ends_local", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "LOCAL"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endAll", "state": "OUTGOING",
+      "cases": [
+        {"name": "ends_local", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "LOCAL"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "endAll", "state": "tombstone",
+      "cases": [
+        {"name": "tombstones_untouched", "expect": {"outcome": "OK", "events": [], "effects": [], "tombstone": true}}
+      ]
+    },
+
+    {
+      "input": "watchdog", "state": "none",
+      "cases": [
+        {"name": "unknown_noop", "expect": {"outcome": "NO_OP", "zero": true}}
+      ]
+    },
+    {
+      "input": "watchdog", "state": "RINGING",
+      "cases": [
+        {"name": "not_armed_in_ringing_noop", "expect": {"outcome": "NO_OP", "callState": "RINGING", "zero": true}}
+      ]
+    },
+    {
+      "input": "watchdog", "state": "ACCEPTED",
+      "cases": [
+        {"name": "no_connect_ends_failed", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "FAILED"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "watchdog", "state": "ACTIVE",
+      "cases": [
+        {"name": "late_fire_post_connect_noop", "expect": {"outcome": "NO_OP", "callState": "ACTIVE", "zero": true}}
+      ]
+    },
+    {
+      "input": "watchdog", "state": "OUTGOING",
+      "cases": [
+        {"name": "abandoned_outgoing_ends_failed", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "FAILED"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "watchdog", "state": "tombstone",
+      "cases": [
+        {"name": "late_fire_on_terminal_noop", "expect": {"outcome": "NO_OP", "zero": true}}
+      ]
+    },
+
+    {
+      "input": "taskRemoved", "state": "none",
+      "cases": [
+        {"name": "unknown_noop", "expect": {"outcome": "NO_OP", "zero": true}}
+      ]
+    },
+    {
+      "input": "taskRemoved", "state": "RINGING",
+      "cases": [
+        {"name": "not_in_call_noop", "expect": {"outcome": "NO_OP", "callState": "RINGING", "zero": true}}
+      ]
+    },
+    {
+      "input": "taskRemoved", "state": "ACCEPTED",
+      "cases": [
+        {"name": "orphan_notification_is_a_lie_ends_failed", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "FAILED"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "taskRemoved", "state": "ACTIVE",
+      "cases": [
+        {"name": "ends_failed", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "FAILED"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "taskRemoved", "state": "OUTGOING",
+      "cases": [
+        {"name": "ends_failed", "expect": {"outcome": "OK", "callState": null, "events": [{"type": "ENDED", "endReason": "FAILED"}], "effects": ["TEARDOWN_UI", "STOP_ONGOING_SERVICE"], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "taskRemoved", "state": "tombstone",
+      "cases": [
+        {"name": "noop_on_terminal", "expect": {"outcome": "NO_OP", "zero": true}}
+      ]
+    },
+
+    {
+      "input": "sweep", "state": "none",
+      "cases": [
+        {"name": "no_state_noop", "sweep": {}, "expect": {"sweptCount": 0}},
+        {"name": "unexpired_tombstone_kept", "sweep": {"arrangeTombstone": true}, "expect": {"sweptCount": 0, "tombstone": true, "registryEntry": true}},
+        {"name": "expired_tombstone_pruned_with_registry", "sweep": {"arrangeTombstone": true, "advancePastTtl": true}, "expect": {"sweptCount": 0, "tombstone": false, "registryEntry": false}},
+        {"name": "expired_pre_tombstone_pruned", "sweep": {"arrangePreTombstone": true, "advancePastTtl": true}, "expect": {"sweptCount": 0, "preTombstone": false}}
+      ]
+    },
+    {
+      "input": "sweep", "state": "RINGING",
+      "cases": [
+        {"name": "healthy_survives", "sweep": {"surfacePosted": true, "notificationPresent": true}, "expect": {"sweptCount": 0, "callState": "RINGING"}},
+        {"name": "past_deadline_times_out", "sweep": {"surfacePosted": true, "notificationPresent": true, "advancePastRingDeadline": true}, "expect": {"sweptCount": 1, "callState": null, "sweptEvents": [{"type": "TIMED_OUT"}], "sweptEffects": ["STOP_RING", "TEARDOWN_UI", "MISSED_CALL"], "tombstone": true}},
+        {"name": "other_boot_times_out_never_rerings", "sweep": {"surfacePosted": true, "notificationPresent": true, "bootCountDelta": 1}, "expect": {"sweptCount": 1, "callState": null, "sweptEvents": [{"type": "TIMED_OUT"}], "tombstone": true}},
+        {"name": "surface_posted_notification_gone_times_out", "sweep": {"surfacePosted": true, "notificationPresent": false}, "expect": {"sweptCount": 1, "callState": null, "sweptEvents": [{"type": "TIMED_OUT"}], "tombstone": true}},
+        {"name": "notification_less_call_is_deadline_only", "sweep": {"surfacePosted": false, "notificationPresent": false}, "expect": {"sweptCount": 0, "callState": "RINGING"}}
+      ]
+    },
+    {
+      "input": "sweep", "state": "ACCEPTED",
+      "cases": [
+        {"name": "healthy_survives", "sweep": {}, "expect": {"sweptCount": 0, "callState": "ACCEPTED"}},
+        {"name": "other_boot_ends_failed_immediately", "sweep": {"bootCountDelta": 1}, "expect": {"sweptCount": 1, "callState": null, "sweptEvents": [{"type": "ENDED", "endReason": "FAILED"}], "tombstone": true}},
+        {"name": "watchdog_deadline_enforced", "sweep": {"advancePastWatchdog": true}, "expect": {"sweptCount": 1, "callState": null, "sweptEvents": [{"type": "ENDED", "endReason": "FAILED"}], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "sweep", "state": "ACTIVE",
+      "cases": [
+        {"name": "healthy_managed_service_alive_survives", "sweep": {"serviceAlive": true}, "expect": {"sweptCount": 0, "callState": "ACTIVE"}},
+        {"name": "other_boot_ends_failed", "sweep": {"bootCountDelta": 1, "serviceAlive": false}, "expect": {"sweptCount": 1, "callState": null, "sweptEvents": [{"type": "ENDED", "endReason": "FAILED"}], "tombstone": true}},
+        {"name": "managed_service_gone_ends_failed", "sweep": {"serviceAlive": false}, "expect": {"sweptCount": 1, "callState": null, "sweptEvents": [{"type": "ENDED", "endReason": "FAILED"}], "tombstone": true}},
+        {"name": "unmanaged_service_gone_survives_honest_gap", "sweep": {"serviceAlive": false, "manageOngoingCall": false}, "expect": {"sweptCount": 0, "callState": "ACTIVE"}}
+      ]
+    },
+    {
+      "input": "sweep", "state": "OUTGOING",
+      "cases": [
+        {"name": "healthy_survives", "sweep": {}, "expect": {"sweptCount": 0, "callState": "OUTGOING"}},
+        {"name": "other_boot_ends_failed", "sweep": {"bootCountDelta": 1}, "expect": {"sweptCount": 1, "callState": null, "sweptEvents": [{"type": "ENDED", "endReason": "FAILED"}], "tombstone": true}},
+        {"name": "watchdog_deadline_enforced", "sweep": {"advancePastWatchdog": true}, "expect": {"sweptCount": 1, "callState": null, "sweptEvents": [{"type": "ENDED", "endReason": "FAILED"}], "tombstone": true}}
+      ]
+    },
+    {
+      "input": "sweep", "state": "tombstone",
+      "cases": [
+        {"name": "within_ttl_kept", "sweep": {}, "expect": {"sweptCount": 0, "tombstone": true}},
+        {"name": "past_ttl_expired", "sweep": {"advancePastTtl": true}, "expect": {"sweptCount": 0, "tombstone": false}},
+        {"name": "cross_boot_within_wall_ttl_still_blocks", "sweep": {"bootCountDelta": 1}, "expect": {"sweptCount": 0, "tombstone": true}}
+      ]
+    }
+  ]
+}

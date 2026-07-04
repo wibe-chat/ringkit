@@ -1,0 +1,76 @@
+{
+  "spec": "PLAN.md §7.5 rk.* wire contract (v1.3.1, 2026-07-05)",
+  "notes": [
+    "NORMATIVE DATA. The parser suite is generated from these rows (one test per",
+    "row/rule). Never change RkWireParser behavior without updating this file in",
+    "the same commit. 'base' is merged under each case's 'payload'."
+  ],
+  "base": {"rk.type": "incoming", "rk.callId": "wire-call-1", "rk.callerName": "Alice"},
+  "cases": [
+    {"name": "not_ringkit_no_rk_keys", "payload": {}, "noBase": true, "expect": {"kind": "notRingKit"}},
+    {"name": "minimal_incoming", "payload": {}, "expect": {"kind": "incoming", "callId": "wire-call-1", "callerName": "Alice", "callType": "AUDIO", "vibrate": true, "visibility": "PUBLIC", "behavior": "FULL_SCREEN"}},
+
+    {"name": "type_missing_rejected", "payload": {"rk.type": null}, "expect": {"kind": "rejected"}},
+    {"name": "type_invalid_rejected", "payload": {"rk.type": "ring"}, "expect": {"kind": "rejected"}},
+    {"name": "call_id_missing_rejected", "payload": {"rk.callId": null}, "expect": {"kind": "rejected"}},
+    {"name": "call_id_overlength_rejected_never_truncated", "payload": {"rk.callId": "x*129"}, "expect": {"kind": "rejected"}},
+    {"name": "call_id_128_ok", "payload": {"rk.callId": "x*128"}, "expect": {"kind": "incoming", "callId": "x*128"}},
+
+    {"name": "caller_name_blank_placeholder", "payload": {"rk.callerName": ""}, "expect": {"kind": "incoming", "callerName": "Unknown caller"}},
+    {"name": "caller_handle_carried", "payload": {"rk.callerHandle": "+15551234"}, "expect": {"kind": "incoming", "callerHandle": "+15551234"}},
+
+    {"name": "avatar_https_ok", "payload": {"rk.avatarUrl": "https://cdn.example.com/a.png"}, "expect": {"kind": "incoming", "avatarUrl": "https://cdn.example.com/a.png"}},
+    {"name": "avatar_non_https_ignored", "payload": {"rk.avatarUrl": "http://cdn.example.com/a.png"}, "expect": {"kind": "incoming", "avatarUrl": null}},
+    {"name": "avatar_flutter_asset_not_on_wire", "payload": {"rk.avatarUrl": "flutterAsset:images/a.png"}, "expect": {"kind": "incoming", "avatarUrl": null}},
+    {"name": "avatar_headers_parsed", "payload": {"rk.avatarUrl": "https://cdn.example.com/a.png", "rk.avatarHeaders": "{\"Authorization\":\"Bearer t\"}"}, "expect": {"kind": "incoming", "avatarHeader": ["Authorization", "Bearer t"]}},
+    {"name": "avatar_headers_bad_json_ignored", "payload": {"rk.avatarHeaders": "{not json"}, "expect": {"kind": "incoming", "avatarHeadersEmpty": true}},
+
+    {"name": "call_type_video", "payload": {"rk.callType": "video"}, "expect": {"kind": "incoming", "callType": "VIDEO"}},
+    {"name": "call_type_invalid_defaults_audio", "payload": {"rk.callType": "hologram"}, "expect": {"kind": "incoming", "callType": "AUDIO"}},
+
+    {"name": "timeout_parsed", "payload": {"rk.timeoutSeconds": "30"}, "expect": {"kind": "incoming", "timeoutSeconds": 30}},
+    {"name": "timeout_invalid_config_default", "payload": {"rk.timeoutSeconds": "soon"}, "expect": {"kind": "incoming", "timeoutSeconds": null}},
+
+    {"name": "sent_at_parsed", "payload": {"rk.sentAt": "1751700000000"}, "expect": {"kind": "incoming", "sentAt": 1751700000000}},
+    {"name": "sent_at_invalid_ignored", "payload": {"rk.sentAt": "yesterday"}, "expect": {"kind": "incoming", "sentAt": null}},
+    {"name": "server_sent_time_preferred_over_payload", "payload": {"rk.sentAt": "1751700000000"}, "serverSentAtMs": 1751700005000, "expect": {"kind": "incoming", "sentAt": 1751700005000}},
+
+    {"name": "extra_parsed", "payload": {"rk.extra": "{\"session\":\"s-1\"}"}, "expect": {"kind": "incoming", "extraEntry": ["session", "s-1"]}},
+    {"name": "extra_over_1kb_truncated_not_rejected", "payload": {"rk.extra": "OVERSIZE_EXTRA"}, "expect": {"kind": "incoming", "extraUnderLimit": true}},
+    {"name": "extra_bad_json_ignored", "payload": {"rk.extra": "]["}, "expect": {"kind": "incoming", "extraEmpty": true}},
+
+    {"name": "ringtone_default_ok", "payload": {"rk.ringtone": "default"}, "expect": {"kind": "incoming", "ringtone": "default"}},
+    {"name": "ringtone_raw_ok", "payload": {"rk.ringtone": "raw:marimba"}, "expect": {"kind": "incoming", "ringtone": "raw:marimba"}},
+    {"name": "ringtone_content_ok", "payload": {"rk.ringtone": "content://media/1"}, "expect": {"kind": "incoming", "ringtone": "content://media/1"}},
+    {"name": "ringtone_flutter_asset_not_on_wire", "payload": {"rk.ringtone": "flutterAsset:tones/ring.mp3"}, "expect": {"kind": "incoming", "ringtone": null}},
+
+    {"name": "vibrate_false", "payload": {"rk.vibrate": "false"}, "expect": {"kind": "incoming", "vibrate": false}},
+    {"name": "vibrate_invalid_defaults_true", "payload": {"rk.vibrate": "maybe"}, "expect": {"kind": "incoming", "vibrate": true}},
+
+    {"name": "visibility_private", "payload": {"rk.lockScreenVisibility": "private"}, "expect": {"kind": "incoming", "visibility": "PRIVATE"}},
+    {"name": "visibility_invalid_defaults_public", "payload": {"rk.lockScreenVisibility": "hidden"}, "expect": {"kind": "incoming", "visibility": "PUBLIC"}},
+    {"name": "behavior_notification_only", "payload": {"rk.lockScreenBehavior": "notificationOnly"}, "expect": {"kind": "incoming", "behavior": "NOTIFICATION_ONLY"}},
+    {"name": "behavior_invalid_defaults_full_screen", "payload": {"rk.lockScreenBehavior": "takeover"}, "expect": {"kind": "incoming", "behavior": "FULL_SCREEN"}},
+
+    {"name": "colors_parsed_opaque_argb", "payload": {"rk.colors.accept": "#00FF00", "rk.colors.decline": "#FF0000", "rk.colors.accent": "#0000FF"}, "expect": {"kind": "incoming", "acceptColor": -16711936, "declineColor": -65536, "accentColor": -16776961}},
+    {"name": "color_invalid_ignored", "payload": {"rk.colors.accept": "green"}, "expect": {"kind": "incoming", "acceptColor": null}},
+
+    {"name": "background_color_ok", "payload": {"rk.background": "#112233"}, "expect": {"kind": "incoming", "background": "#112233"}},
+    {"name": "background_https_ok", "payload": {"rk.background": "https://cdn.example.com/bg.png"}, "expect": {"kind": "incoming", "background": "https://cdn.example.com/bg.png"}},
+    {"name": "background_flutter_asset_not_on_wire", "payload": {"rk.background": "flutterAsset:images/bg.png"}, "expect": {"kind": "incoming", "background": null}},
+
+    {"name": "missed_call_options", "payload": {"rk.missedCall.show": "false", "rk.missedCall.title": "You missed Alice", "rk.missedCall.subtitle": "Tap to call back", "rk.missedCall.showCallback": "false", "rk.missedCall.callbackText": "Call back"}, "expect": {"kind": "incoming", "missedShow": false, "missedTitle": "You missed Alice", "missedSubtitle": "Tap to call back", "missedShowCallback": false, "missedCallbackText": "Call back"}},
+
+    {"name": "use_telecom_true", "payload": {"rk.useTelecom": "true"}, "expect": {"kind": "incoming", "useTelecom": true}},
+    {"name": "use_telecom_invalid_config_default", "payload": {"rk.useTelecom": "yes"}, "expect": {"kind": "incoming", "useTelecom": null}},
+
+    {"name": "unknown_rk_keys_ignored_forward_compat", "payload": {"rk.futureFeature": "on", "rk.v9": "x"}, "expect": {"kind": "incoming", "callId": "wire-call-1"}},
+    {"name": "non_rk_keys_inside_matching_message_ignored", "payload": {"appKey": "appValue"}, "expect": {"kind": "incoming", "extraEmpty": true}},
+
+    {"name": "cancel_minimal_default_reason", "payload": {"rk.type": "cancel"}, "expect": {"kind": "cancel", "callId": "wire-call-1", "cancelReason": "CALLER_CANCELLED"}},
+    {"name": "cancel_answered_elsewhere", "payload": {"rk.type": "cancel", "rk.reason": "answeredElsewhere"}, "expect": {"kind": "cancel", "cancelReason": "ANSWERED_ELSEWHERE"}},
+    {"name": "cancel_declined_elsewhere", "payload": {"rk.type": "cancel", "rk.reason": "declinedElsewhere"}, "expect": {"kind": "cancel", "cancelReason": "DECLINED_ELSEWHERE"}},
+    {"name": "cancel_invalid_reason_defaults", "payload": {"rk.type": "cancel", "rk.reason": "ghosted"}, "expect": {"kind": "cancel", "cancelReason": "CALLER_CANCELLED"}},
+    {"name": "cancel_missing_call_id_rejected", "payload": {"rk.type": "cancel", "rk.callId": null}, "expect": {"kind": "rejected"}}
+  ]
+}
