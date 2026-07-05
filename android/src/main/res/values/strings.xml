@@ -1,0 +1,27 @@
+<!-- English-only v1 (PLAN Q7); all overridable via standard Android resource
+     overrides + per-call params (§8.5). Prefixed ringkit_ against collisions. -->
+<resources>
+    <string name="ringkit_channel_incoming">Incoming calls</string>
+    <string name="ringkit_channel_incoming_audible">Incoming calls (fallback)</string>
+    <string name="ringkit_channel_ongoing">Ongoing call</string>
+    <string name="ringkit_channel_missed">Missed calls</string>
+
+    <string name="ringkit_incoming_audio">Incoming call</string>
+    <string name="ringkit_incoming_video">Incoming video call</string>
+    <string name="ringkit_action_accept">Answer</string>
+    <string name="ringkit_action_decline">Decline</string>
+    <string name="ringkit_action_hang_up">Hang up</string>
+    <string name="ringkit_action_call_back">Call back</string>
+    <string name="ringkit_connecting">Connecting…</string>
+    <string name="ringkit_calling">Calling…</string>
+
+    <!-- §8.10 missed-call copy per cancel reason. -->
+    <string name="ringkit_missed_call">Missed call</string>
+    <string name="ringkit_missed_answered_elsewhere">Answered on another device</string>
+    <string name="ringkit_missed_declined_elsewhere">Declined on another device</string>
+
+    <!-- a11y (§8.5 skeleton). -->
+    <string name="ringkit_a11y_accept_call">Answer call</string>
+    <string name="ringkit_a11y_decline_call">Decline call</string>
+    <string name="ringkit_a11y_caller_avatar">Caller photo</string>
+</resources>

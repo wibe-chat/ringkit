@@ -1,9 +1,16 @@
 package com.wibechat.ringkit.adapter
 
+import android.content.Context
+import com.wibechat.ringkit.core.CoreConfig
 import com.wibechat.ringkit.core.CoreDeliveryPath
+import com.wibechat.ringkit.core.CoreLogLevel
+import com.wibechat.ringkit.core.CoreSuppressReason
+import com.wibechat.ringkit.core.IncomingCallOrchestrator
 import com.wibechat.ringkit.core.RingKitCore
-import com.wibechat.ringkit.core.TransitionInput
 import com.wibechat.ringkit.core.TransitionResult
+import com.wibechat.ringkit.ui.CallNotificationFactory
+import java.io.File
+import java.security.MessageDigest
 
 /**
  * Pigeon host-API implementation (PLAN §6.1, §8.9): every method hops to the
@@ -11,88 +18,103 @@ import com.wibechat.ringkit.core.TransitionResult
  * thread is never blocked. One instance exists per attached engine; ack calls
  * from non-designated engines are ignored (§10.3 step 1).
  *
- * M1 scope: repository transitions + live event delivery. The §8.11
- * precondition matrix, UI effects and services are the M2 orchestrator.
+ * M2: commands route through the IncomingCallOrchestrator — repository
+ * transition + §8.11 evaluation + real UI/service effects + live delivery.
  */
 internal class RingKitHostApiImpl(
+    private val context: Context,
     private val core: RingKitCore.Instance,
     private val engineId: Int,
 ) : RingKitHostApi {
 
+    private val orchestrator = IncomingCallOrchestrator(context, core)
+
     private fun <T> onWriter(callback: (Result<T>) -> Unit, block: () -> T) {
-        core.writer.submit(block) { result -> callback(result) }
+        core.writer.submit(block) { result ->
+            result.exceptionOrNull()?.let { t ->
+                core.ringLog.incident(
+                    com.wibechat.ringkit.core.RingLog.IncidentType.BOUNDARY_EXCEPTION,
+                    "RingKitHostApiImpl", null, throwable = t,
+                )
+            }
+            callback(result)
+        }
     }
 
     /** Live-path delivery of this transition's events to the designated engine. */
-    private fun deliver(result: TransitionResult) {
+    private fun deliver(result: TransitionResult, suppress: CoreSuppressReason? = null) {
         val records =
             (result.persistedEvents + result.liveEvents).map {
-                PigeonMapper.eventRecord(it, CoreDeliveryPath.LIVE)
+                PigeonMapper.eventRecord(it, CoreDeliveryPath.LIVE, suppress)
             }
         EngineRegistry.emitToDesignated(records)
     }
 
     override fun initialize(config: RingKitConfig, callback: (Result<Unit>) -> Unit) =
         onWriter(callback) {
-            core.repository.updateConfig(PigeonMapper.toCore(config))
+            val resolved = extractFlutterAssetRingtone(PigeonMapper.toCore(config))
+            val applied = core.repository.updateConfig(resolved)
+            core.ringLog.level = applied.logLevel
+            // §8.2: pre-create channels (the audible fallback must exist before
+            // the first degraded show ever needs it).
+            CallNotificationFactory(context, applied, core.time, core.ringLog, core.repository::notificationIdFor)
+                .ensureChannels()
             Unit
         }
 
     override fun showIncomingCall(call: IncomingCall, callback: (Result<ShowCallResult>) -> Unit) =
         onWriter(callback) {
-            val result = core.repository.dispatch(TransitionInput.Show(PigeonMapper.toCore(call)))
-            deliver(result)
-            PigeonMapper.showResult(result.outcome)
+            val outcome = orchestrator.showOnWriter(PigeonMapper.toCore(call))
+            deliver(outcome.result, outcome.suppressReason)
+            PigeonMapper.showResult(outcome)
         }
 
     override fun acceptCall(callId: String, callback: (Result<CallCommandResult>) -> Unit) =
         onWriter(callback) {
             // Programmatic accept (§4.3): same native path, no launch action.
-            val result = core.repository.dispatch(TransitionInput.Accept(callId, fromAction = false))
+            val result = orchestrator.acceptProgrammaticOnWriter(callId)
             deliver(result)
             PigeonMapper.commandResult(result.outcome)
         }
 
     override fun declineCall(callId: String, callback: (Result<CallCommandResult>) -> Unit) =
         onWriter(callback) {
-            val result = core.repository.dispatch(TransitionInput.Decline(callId))
+            val result = orchestrator.declineOnWriter(callId)
             deliver(result)
             PigeonMapper.commandResult(result.outcome)
         }
 
     override fun endCall(callId: String, reason: EndReason, callback: (Result<CallCommandResult>) -> Unit) =
         onWriter(callback) {
-            val result =
-                core.repository.dispatch(TransitionInput.End(callId, PigeonMapper.endReasonToCore(reason)))
+            val result = orchestrator.endOnWriter(callId, PigeonMapper.endReasonToCore(reason))
             deliver(result)
             PigeonMapper.commandResult(result.outcome)
         }
 
     override fun cancelCall(callId: String, reason: CancelReason, callback: (Result<CallCommandResult>) -> Unit) =
         onWriter(callback) {
-            val result =
-                core.repository.dispatch(TransitionInput.Cancel(callId, PigeonMapper.cancelReasonToCore(reason)))
+            val result = orchestrator.cancelOnWriter(callId, PigeonMapper.cancelReasonToCore(reason))
             deliver(result)
             PigeonMapper.commandResult(result.outcome)
         }
 
     override fun endAllCalls(callback: (Result<Unit>) -> Unit) =
         onWriter(callback) {
-            val result = core.repository.dispatch(TransitionInput.EndAll)
+            val result = orchestrator.endAllOnWriter()
             deliver(result)
             Unit
         }
 
     override fun setCallConnected(callId: String, callback: (Result<CallCommandResult>) -> Unit) =
         onWriter(callback) {
-            val result = core.repository.dispatch(TransitionInput.SetConnected(callId))
+            val result = orchestrator.setConnectedOnWriter(callId)
             deliver(result)
             PigeonMapper.commandResult(result.outcome)
         }
 
     override fun startOutgoingCall(call: OutgoingCall, callback: (Result<ShowCallResult>) -> Unit) =
         onWriter(callback) {
-            val result = core.repository.dispatch(TransitionInput.StartOutgoing(PigeonMapper.toCore(call)))
+            val result = orchestrator.startOutgoingOnWriter(PigeonMapper.toCore(call))
             deliver(result)
             PigeonMapper.showResult(result.outcome)
         }
@@ -103,8 +125,7 @@ internal class RingKitHostApiImpl(
         callback: (Result<CallCommandResult>) -> Unit,
     ) =
         onWriter(callback) {
-            val result =
-                core.repository.dispatch(TransitionInput.UpdateInfo(callId, PigeonMapper.toCore(update)))
+            val result = orchestrator.updateInfoOnWriter(callId, PigeonMapper.toCore(update))
             deliver(result)
             PigeonMapper.commandResult(result.outcome)
         }
@@ -154,7 +175,7 @@ internal class RingKitHostApiImpl(
 
     override fun diagnose(callback: (Result<DiagnosticsReport>) -> Unit) =
         onWriter(callback) {
-            // Diagnostics v1 lands in M3 (§11.3); this is the honest M1 subset.
+            // Diagnostics v1 lands in M3 (§11.3); this is the honest M2 subset.
             val log = core.repository.eventLog
             DiagnosticsReport(
                 findings = emptyList(),
@@ -168,8 +189,46 @@ internal class RingKitHostApiImpl(
                     ),
                 lastShowResult = null,
                 lastDeliveryPath = null,
-                ringTraces = emptyList(),
+                ringTraces =
+                    core.trace.buffer.entries.map { "[${it.tag}] ${it.callId ?: "-"}: ${it.message}" },
                 generatedAtEpochMs = core.time.wallMs(),
             )
         }
+
+    // ── flutterAsset ringtone extraction (§8.4: config-level only) ────────
+
+    /**
+     * `flutterAsset:` sources are APK-internal asset keys, not filesystem
+     * paths — resolved via FlutterLoader at initialize() and EXTRACTED (copied)
+     * to noBackupFilesDir so cold-native playback needs no Flutter (§8.4).
+     */
+    private fun extractFlutterAssetRingtone(config: CoreConfig): CoreConfig {
+        val source = config.defaultRingtone ?: return config
+        if (!source.startsWith("flutterAsset:")) return config
+        return try {
+            val assetPath = source.removePrefix("flutterAsset:")
+            val lookupKey =
+                io.flutter.FlutterInjector.instance().flutterLoader().getLookupKeyForAsset(assetPath)
+            val hash =
+                MessageDigest.getInstance("SHA-256").digest(assetPath.toByteArray())
+                    .joinToString("") { "%02x".format(it) }.take(16)
+            val extension = assetPath.substringAfterLast('.', "dat")
+            val outDir = File(File(context.noBackupFilesDir, "ringkit"), "assets")
+            outDir.mkdirs()
+            val outFile = File(outDir, "ringtone_$hash.$extension")
+            if (!outFile.exists()) {
+                context.assets.open(lookupKey).use { input ->
+                    outFile.outputStream().use { output -> input.copyTo(output) }
+                }
+            }
+            config.copy(defaultRingtone = "file://${outFile.absolutePath}")
+        } catch (e: Exception) {
+            core.ringLog.log(
+                CoreLogLevel.ERROR, "config", "RingKitHostApiImpl.extractFlutterAssetRingtone", null,
+                "flutterAsset ringtone extraction failed — using device default",
+                mapOf("source" to source), e,
+            )
+            config.copy(defaultRingtone = null)
+        }
+    }
 }

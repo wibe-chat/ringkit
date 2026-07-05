@@ -15,6 +15,7 @@ class RingkitPlugin : FlutterPlugin, ActivityAware {
 
     private var engineId: Int = 0
     private var core: RingKitCore.Instance? = null
+    private var permissionsImpl: RingKitPermissionsApiImpl? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         val instance = RingKitCore.get(binding.applicationContext)
@@ -22,11 +23,13 @@ class RingkitPlugin : FlutterPlugin, ActivityAware {
         engineId = System.identityHashCode(binding.binaryMessenger)
 
         EngineRegistry.register(engineId)
-        RingKitHostApi.setUp(binding.binaryMessenger, RingKitHostApiImpl(instance, engineId))
-        RingKitPermissionsApi.setUp(
+        RingKitHostApi.setUp(
             binding.binaryMessenger,
-            RingKitPermissionsApiImpl(binding.applicationContext),
+            RingKitHostApiImpl(binding.applicationContext, instance, engineId),
         )
+        val permissions = RingKitPermissionsApiImpl(binding.applicationContext)
+        permissionsImpl = permissions
+        RingKitPermissionsApi.setUp(binding.binaryMessenger, permissions)
         StreamCallEventsStreamHandler.register(binding.binaryMessenger, sinkHandler(engineId))
 
         // §8.10: reconciliation sweep at every native entry point.
@@ -37,27 +40,33 @@ class RingkitPlugin : FlutterPlugin, ActivityAware {
         RingKitHostApi.setUp(binding.binaryMessenger, null)
         RingKitPermissionsApi.setUp(binding.binaryMessenger, null)
         EngineRegistry.unregister(engineId)
+        permissionsImpl = null
         core = null
     }
 
-    // ── ActivityAware: Activity attachment designates the engine (§10.3) ─
+    // ── ActivityAware: Activity attachment designates the engine (§10.3)
+    //    and provides the runtime-permission surface (§11.2) ──────────────
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
         EngineRegistry.setActivityAttached(engineId, true)
+        permissionsImpl?.attachActivity(binding)
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
         // Config change: attachment returns momentarily; designation keeps
         // falling back to most-recently-attached meanwhile — no action needed.
         EngineRegistry.setActivityAttached(engineId, false)
+        permissionsImpl?.detachActivity()
     }
 
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
         EngineRegistry.setActivityAttached(engineId, true)
+        permissionsImpl?.attachActivity(binding)
     }
 
     override fun onDetachedFromActivity() {
         EngineRegistry.setActivityAttached(engineId, false)
+        permissionsImpl?.detachActivity()
     }
 
     private fun sinkHandler(id: Int): StreamCallEventsStreamHandler =

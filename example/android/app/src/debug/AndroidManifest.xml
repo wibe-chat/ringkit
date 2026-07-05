@@ -4,4 +4,18 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+
+    <application>
+        <!-- DEBUG-ONLY adb trigger (CLAUDE.md cookbook): exported so
+             `adb shell am broadcast` reaches it; routes through the Mode-2
+             parser path (RingKitNative). Never ships in release. -->
+        <receiver
+            android:name=".SimulateCallReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.wibechat.ringkit_example.SIMULATE_CALL" />
+                <action android:name="com.wibechat.ringkit_example.SIMULATE_CANCEL" />
+            </intent-filter>
+        </receiver>
+    </application>
 </manifest>

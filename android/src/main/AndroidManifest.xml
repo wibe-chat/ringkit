@@ -1,3 +1,77 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-  package="com.wibechat.ringkit">
+<!-- Plugin-provided manifest (PLAN §8.1): nothing for the app to add in the
+     default setup. Every component exported="false" — PendingIntents from our
+     own app don't require exported components (the incumbent exported
+     everything = open attack surface, #651).
+
+     Explicitly NOT declared (§8.1): RECORD_AUDIO, CAMERA,
+     FOREGROUND_SERVICE_MICROPHONE/CAMERA, ACCESS_NOTIFICATION_POLICY,
+     REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, WRITE_SETTINGS, custom permissions. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <!-- Declaration alone satisfies the phoneCall FGS-type prerequisite
+         (AOSP-verified, §8.1); required by core-telecom in Phase 4. -->
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Avatar fetch only (§8.1). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application>
+
+        <!-- §8.1: binds to the current ringer-owner; re-binds via onNewIntent
+             (launchMode singleTask — never a second instance, #550 class).
+             No screenOrientation lock: Android 16 ignores it on large screens. -->
+        <activity
+            android:name="com.wibechat.ringkit.ui.IncomingCallActivity"
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Material.NoActionBar" />
+
+        <!-- §8.1: translucent, showWhenLocked + turnScreenOn, null-intent-safe;
+             forwards the launch intent synchronously in onCreate (§4.3). -->
+        <activity
+            android:name="com.wibechat.ringkit.ui.AcceptTrampolineActivity"
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- §8.1: explicit-intent only; every PI targeting it sets
+             FLAG_RECEIVER_FOREGROUND (R39). -->
+        <receiver
+            android:name="com.wibechat.ringkit.core.CallActionReceiver"
+            android:exported="false" />
+
+        <!-- §8.1: system-protected broadcasts; runs ONLY the reconciliation
+             sweep — never starts an FGS (Android 15 forbids phoneCall from
+             BOOT_COMPLETED and the sweep needs none). -->
+        <receiver
+            android:name="com.wibechat.ringkit.core.SweepReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- §8.1: ringing FGS; lifetime per §5.2 (lives while ANY call rings). -->
+        <service
+            android:name="com.wibechat.ringkit.services.RingingService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="phoneCall" />
+
+    </application>
 </manifest>

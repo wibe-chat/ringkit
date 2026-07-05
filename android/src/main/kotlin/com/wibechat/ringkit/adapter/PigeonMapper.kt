@@ -7,9 +7,14 @@ import com.wibechat.ringkit.core.CoreCallOptions
 import com.wibechat.ringkit.core.CoreCallType
 import com.wibechat.ringkit.core.CoreCancelReason
 import com.wibechat.ringkit.core.CoreConfig
+import com.wibechat.ringkit.core.CoreDegradeReason
 import com.wibechat.ringkit.core.CoreDeliveryPath
 import com.wibechat.ringkit.core.CoreEndReason
 import com.wibechat.ringkit.core.CoreEvent
+import com.wibechat.ringkit.core.CoreEventType
+import com.wibechat.ringkit.core.CoreFailReason
+import com.wibechat.ringkit.core.CoreSuppressReason
+import com.wibechat.ringkit.core.IncomingCallOrchestrator
 import com.wibechat.ringkit.core.CoreForegroundBehavior
 import com.wibechat.ringkit.core.CoreIncomingCall
 import com.wibechat.ringkit.core.CoreCallInfoUpdate
@@ -113,6 +118,19 @@ internal object PigeonMapper {
 
     // ── core → Pigeon ────────────────────────────────────────────────────
 
+    /** §8.11 composition: failed short-circuits; degradations accumulate on shown. */
+    fun showResult(outcome: IncomingCallOrchestrator.ShowOutcome): ShowCallResult =
+        when {
+            outcome.failReason != null ->
+                ShowCallResult(code = ShowCallResultCode.FAILED, failReason = failReason(outcome.failReason))
+            outcome.result.outcome == TransitionOutcome.SHOWN && outcome.degradations.isNotEmpty() ->
+                ShowCallResult(
+                    code = ShowCallResultCode.DEGRADED,
+                    degradations = outcome.degradations.map { degradeReason(it) },
+                )
+            else -> showResult(outcome.result.outcome)
+        }
+
     fun showResult(outcome: TransitionOutcome): ShowCallResult =
         when (outcome) {
             TransitionOutcome.SHOWN -> ShowCallResult(code = ShowCallResultCode.SHOWN)
@@ -122,8 +140,31 @@ internal object PigeonMapper {
             TransitionOutcome.EXPIRED -> ShowCallResult(code = ShowCallResultCode.EXPIRED)
             TransitionOutcome.INVALID_PARAMS ->
                 ShowCallResult(code = ShowCallResultCode.FAILED, failReason = FailReason.INVALID_PARAMS)
-            // §8.11 degraded/failed evaluation is the M2 orchestrator's job.
             else -> ShowCallResult(code = ShowCallResultCode.FAILED, failReason = FailReason.STORE_CORRUPT)
+        }
+
+    private fun degradeReason(reason: CoreDegradeReason): DegradeReason =
+        when (reason) {
+            CoreDegradeReason.FSI_DENIED -> DegradeReason.FSI_DENIED
+            CoreDegradeReason.FGS_DENIED -> DegradeReason.FGS_DENIED
+            CoreDegradeReason.FCM_DOWNGRADED -> DegradeReason.FCM_DOWNGRADED
+            CoreDegradeReason.CHANNEL_DEMOTED -> DegradeReason.CHANNEL_DEMOTED
+            CoreDegradeReason.CALL_STYLE_REJECTED -> DegradeReason.CALL_STYLE_REJECTED
+        }
+
+    private fun failReason(reason: CoreFailReason): FailReason =
+        when (reason) {
+            CoreFailReason.INVALID_PARAMS -> FailReason.INVALID_PARAMS
+            CoreFailReason.STORE_CORRUPT -> FailReason.STORE_CORRUPT
+            CoreFailReason.NOTIFICATIONS_BLOCKED -> FailReason.NOTIFICATIONS_BLOCKED
+            CoreFailReason.CHANNEL_BLOCKED -> FailReason.CHANNEL_BLOCKED
+        }
+
+    fun suppressReason(reason: CoreSuppressReason): SuppressReason =
+        when (reason) {
+            CoreSuppressReason.NOTIFICATIONS_BLOCKED -> SuppressReason.NOTIFICATIONS_BLOCKED
+            CoreSuppressReason.CHANNEL_BLOCKED -> SuppressReason.CHANNEL_BLOCKED
+            CoreSuppressReason.FOREGROUND_SILENT_MODE -> SuppressReason.FOREGROUND_SILENT_MODE
         }
 
     fun commandResult(outcome: TransitionOutcome): CallCommandResult =
@@ -150,7 +191,11 @@ internal object PigeonMapper {
             extra = info.extra,
         )
 
-    fun eventRecord(event: CoreEvent, path: CoreDeliveryPath): CallEventRecord =
+    fun eventRecord(
+        event: CoreEvent,
+        path: CoreDeliveryPath,
+        suppress: CoreSuppressReason? = null,
+    ): CallEventRecord =
         CallEventRecord(
             type = eventType(event.type),
             call = callInfo(event.callInfo),
@@ -160,6 +205,10 @@ internal object PigeonMapper {
             persisted = event.type.isPersisted(),
             endReason = event.endReason?.let { EndReason.valueOf(it.name) },
             cancelReason = event.cancelReason?.let { cancelReason(it) },
+            // §8.11 failed/silent rows only — and only on the live CallRinging.
+            suppressed = if (suppress != null && event.type == CoreEventType.RINGING) true else null,
+            suppressReason =
+                if (suppress != null && event.type == CoreEventType.RINGING) suppressReason(suppress) else null,
         )
 
     fun activeCall(record: CallRecord): ActiveCall =

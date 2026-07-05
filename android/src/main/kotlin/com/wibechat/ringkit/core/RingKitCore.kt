@@ -16,10 +16,13 @@ object RingKitCore {
     @Volatile
     private var instance: Instance? = null
 
-    class Instance internal constructor(appContext: Context) {
+    class Instance internal constructor(internal val appContext: Context) {
         val time: TimeSource = RealTimeSource(appContext)
         val store: CoreStore = CoreStore.open(appContext)
         val writer: WriterExecutor = WriterExecutor()
+
+        /** §5.2 connection watchdogs (orchestrator-hosted, service-independent). */
+        val watchdogs: WatchdogScheduler = WatchdogScheduler(writer)
 
         /** §11.5 always-on capture sink; level follows persisted config below. */
         val ringLog: RingLog = RingLog.open(java.io.File(appContext.noBackupFilesDir, CoreStore.DIR_NAME), time)
@@ -33,13 +36,46 @@ object RingKitCore {
         val bus: CallBus = CallBus(ringLog)
 
         /**
-         * Sweep probes (§8.10). notificationPresent is wired to the real
-         * NotificationManager by the orchestrator's init (ui/ owns the ids);
+         * Sweep probes (§8.10). The notification-presence check applies only to
+         * calls that actually posted a surface, with a 10 s post-in-flight grace
+         * (the FGS posts asynchronously moments after show marks the flag).
          * ongoingServiceAlive stays `true` until OngoingCallService exists (M3)
          * — a lie in the safe direction (never falsely sweeps ACTIVE calls).
          */
         @Volatile
-        var sweepEnv: SweepEnv = SweepEnv(notificationPresent = { true }, ongoingServiceAlive = true)
+        var sweepEnv: SweepEnv =
+            SweepEnv(
+                notificationPresent = { callId ->
+                    // Runs on the writer during sweep — repository reads are safe.
+                    val record = repository.callFor(callId)
+                    val notifId = repository.notificationIdFor(callId)
+                    when {
+                        record == null || notifId == null -> true
+                        time.elapsedMs() - record.shownAtElapsedMs < POST_GRACE_MS -> true
+                        else ->
+                            runCatching {
+                                val manager =
+                                    appContext.getSystemService(Context.NOTIFICATION_SERVICE)
+                                        as android.app.NotificationManager
+                                manager.activeNotifications.any { it.id == notifId }
+                            }.getOrDefault(true)
+                    }
+                },
+                ongoingServiceAlive = true,
+            )
+
+        /**
+         * Process-wide avatar loader (§8.2): the in-flight registry must span
+         * orchestrator instances (receivers construct one per event) so a
+         * terminal transition can always cancel the fetch it didn't start.
+         */
+        val avatarLoader: com.wibechat.ringkit.ui.AvatarLoader by lazy {
+            com.wibechat.ringkit.ui.AvatarLoader(
+                appContext,
+                java.io.File(appContext.noBackupFilesDir, CoreStore.DIR_NAME),
+                ringLog,
+            )
+        }
 
         init {
             ringLog.level = repository.currentConfig().logLevel
@@ -61,10 +97,17 @@ object RingKitCore {
         }
     }
 
-    /** §8.10: sweep on the writer at every native entry point. */
+    /** Grace window before the sweep trusts the notification-presence probe. */
+    const val POST_GRACE_MS = 10_000L
+
+    /**
+     * §8.10: orchestrated sweep on the writer at every native entry point —
+     * swept calls get their teardown + missed-call effects, not just state.
+     */
     fun sweepOnEntry(context: Context) {
         val core = get(context)
-        core.writer.post { core.repository.sweep(core.sweepEnv) }
+        val appContext = context.applicationContext
+        core.writer.post { IncomingCallOrchestrator(appContext, core).sweepNow() }
     }
 
     /** Tests only: drop the process singleton between cases. */

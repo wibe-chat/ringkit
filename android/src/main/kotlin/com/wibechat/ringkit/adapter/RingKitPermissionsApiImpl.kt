@@ -17,8 +17,39 @@ import android.provider.Settings
  */
 internal class RingKitPermissionsApiImpl(private val context: Context) : RingKitPermissionsApi {
 
+    companion object {
+        private const val REQUEST_CODE_NOTIFICATIONS = 42421
+    }
+
     private val notificationManager: NotificationManager
         get() = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+    private var activityBinding: io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding? = null
+    private var pendingNotificationRequest: ((Boolean) -> Unit)? = null
+
+    private val permissionListener =
+        io.flutter.plugin.common.PluginRegistry.RequestPermissionsResultListener { code, _, results ->
+            if (code != REQUEST_CODE_NOTIFICATIONS) return@RequestPermissionsResultListener false
+            val granted =
+                results.isNotEmpty() && results[0] == PackageManager.PERMISSION_GRANTED
+            pendingNotificationRequest?.invoke(granted)
+            pendingNotificationRequest = null
+            true
+        }
+
+    fun attachActivity(binding: io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding) {
+        activityBinding = binding
+        binding.addRequestPermissionsResultListener(permissionListener)
+    }
+
+    fun detachActivity() {
+        activityBinding?.removeRequestPermissionsResultListener(permissionListener)
+        // An in-flight prompt that loses its activity resolves honestly: report
+        // the current state instead of hanging the Dart future.
+        pendingNotificationRequest?.invoke(notificationManager.areNotificationsEnabled())
+        pendingNotificationRequest = null
+        activityBinding = null
+    }
 
     override fun snapshot(callback: (Result<PermissionSnapshot>) -> Unit) {
         callback(
@@ -43,9 +74,25 @@ internal class RingKitPermissionsApiImpl(private val context: Context) : RingKit
     }
 
     override fun requestNotifications(callback: (Result<Boolean>) -> Unit) {
-        // The runtime prompt needs Activity result plumbing — pulled forward in
-        // M2 (SCOPE-1). Until then: report the current state, never lie.
-        callback(Result.success(notificationManager.areNotificationsEnabled()))
+        // §11.2: POST_NOTIFICATIONS runtime prompt (13+; a no-op grant below).
+        if (Build.VERSION.SDK_INT < 33 || notificationManager.areNotificationsEnabled()) {
+            callback(Result.success(notificationManager.areNotificationsEnabled()))
+            return
+        }
+        val activity = activityBinding?.activity
+        if (activity == null || pendingNotificationRequest != null) {
+            // No activity (background isolate) or a prompt already in flight:
+            // report the true current state, never lie, never hang.
+            callback(Result.success(notificationManager.areNotificationsEnabled()))
+            return
+        }
+        pendingNotificationRequest = { granted -> callback(Result.success(granted)) }
+        runCatching {
+            activity.requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), REQUEST_CODE_NOTIFICATIONS)
+        }.onFailure {
+            pendingNotificationRequest = null
+            callback(Result.success(notificationManager.areNotificationsEnabled()))
+        }
     }
 
     override fun canUseFullScreenIntent(callback: (Result<Boolean>) -> Unit) {

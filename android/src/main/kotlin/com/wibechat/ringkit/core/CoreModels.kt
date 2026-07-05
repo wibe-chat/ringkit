@@ -31,6 +31,15 @@ enum class CoreForegroundBehavior { HEADS_UP, FULL_SCREEN, SILENT }
 
 enum class CoreLogLevel { NONE, ERROR, INFO, VERBOSE }
 
+/** §8.11 degradation set members (accumulate; each row's mitigation independent). */
+enum class CoreDegradeReason { FSI_DENIED, FGS_DENIED, FCM_DOWNGRADED, CHANNEL_DEMOTED, CALL_STYLE_REJECTED }
+
+/** §8.11 failed reasons (short-circuit precedence invalidParams > storeCorrupt > notificationsBlocked > channelBlocked). */
+enum class CoreFailReason { INVALID_PARAMS, STORE_CORRUPT, NOTIFICATIONS_BLOCKED, CHANNEL_BLOCKED }
+
+/** §6.2 CallRinging(suppressed:) reasons — §8.11 failed rows + foreground silent mode. */
+enum class CoreSuppressReason { NOTIFICATIONS_BLOCKED, CHANNEL_BLOCKED, FOREGROUND_SILENT_MODE }
+
 /** Caller/callee identity snapshot; round-trips into every event (§6.4). */
 data class CoreCallInfo(
     val id: String,

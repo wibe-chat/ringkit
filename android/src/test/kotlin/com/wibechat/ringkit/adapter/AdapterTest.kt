@@ -67,8 +67,8 @@ class AdapterTest {
 
         EngineRegistry.register(1)
         EngineRegistry.register(2) // most recent → designated
-        val foreign = RingKitHostApiImpl(core, engineId = 1)
-        val designated = RingKitHostApiImpl(core, engineId = 2)
+        val foreign = RingKitHostApiImpl(RuntimeEnvironment.getApplication(), core, engineId = 1)
+        val designated = RingKitHostApiImpl(RuntimeEnvironment.getApplication(), core, engineId = 2)
 
         call { done -> foreign.ackEvents(seq, listOf(seq)) { done() } }
         assertEquals("foreign ack ignored", 1, repo.eventLog.takePending().size)
@@ -82,7 +82,7 @@ class AdapterTest {
     @Test
     fun background_handles_round_trip_as_longs() {
         val core = RingKitCore.get(RuntimeEnvironment.getApplication())
-        val api = RingKitHostApiImpl(core, engineId = 7)
+        val api = RingKitHostApiImpl(RuntimeEnvironment.getApplication(), core, engineId = 7)
 
         // A handle that overflows Int32 — the incumbent's cast bug regression.
         val dispatcher = 0x1_2345_6789L
@@ -95,10 +95,14 @@ class AdapterTest {
     // ── host API end-to-end over the writer (§8.9) ───────────────────────
 
     @Test
+    @org.robolectric.annotation.Config(sdk = [33])
     fun show_then_take_pending_then_ack_via_host_api() {
+        // SDK 33 = below the FSI special-access world: Robolectric 35 answers
+        // canUseFullScreenIntent()=false, which correctly reports degraded
+        // (covered by OrchestratorPipelineTest); this test is about ack flow.
         val core = RingKitCore.get(RuntimeEnvironment.getApplication())
         EngineRegistry.register(5)
-        val api = RingKitHostApiImpl(core, engineId = 5)
+        val api = RingKitHostApiImpl(RuntimeEnvironment.getApplication(), core, engineId = 5)
 
         var showResult: ShowCallResult? = null
         call { done ->
@@ -126,7 +130,7 @@ class AdapterTest {
     fun invalid_show_maps_to_failed_invalid_params() {
         val core = RingKitCore.get(RuntimeEnvironment.getApplication())
         EngineRegistry.register(6)
-        val api = RingKitHostApiImpl(core, engineId = 6)
+        val api = RingKitHostApiImpl(RuntimeEnvironment.getApplication(), core, engineId = 6)
 
         var result: ShowCallResult? = null
         call { done -> api.showIncomingCall(pigeonIncoming("   ")) { r -> result = r.getOrThrow(); done() } }
