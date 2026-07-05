@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import com.wibechat.ringkit.core.RingKitCore
 
 /**
  * §11.2 — honest-minimal M1 implementation: real system reads and best-effort
@@ -116,8 +117,15 @@ internal class RingKitPermissionsApiImpl(private val context: Context) : RingKit
     override fun openChannelSettings(channel: RingKitChannel, callback: (Result<Unit>) -> Unit) {
         callback(
             runCatching {
-                // Channel ids are versioned (§8.2); the ui/ factory owns them from M2.
-                val channelId = "ringkit_${channel.name.lowercase()}_v1"
+                // Versioned ids from the single owner (§8.2) + the configured suffix.
+                val suffix = RingKitCore.get(context).repository.currentConfig().channelSuffix
+                val channelId =
+                    when (channel) {
+                        RingKitChannel.INCOMING -> com.wibechat.ringkit.ui.RingKitChannels.incoming(suffix)
+                        RingKitChannel.INCOMING_AUDIBLE -> com.wibechat.ringkit.ui.RingKitChannels.incomingAudible(suffix)
+                        RingKitChannel.ONGOING -> com.wibechat.ringkit.ui.RingKitChannels.ongoing(suffix)
+                        RingKitChannel.MISSED -> com.wibechat.ringkit.ui.RingKitChannels.missed(suffix)
+                    }
                 context.startActivity(
                     Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
                         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
@@ -145,8 +153,31 @@ internal class RingKitPermissionsApiImpl(private val context: Context) : RingKit
     }
 
     override fun requestIgnoreBatteryOptimizations(callback: (Result<Boolean>) -> Unit) {
-        // Direct-dialog variant requires the APP to declare the permission
-        // (§11.2); the M2 helper checks the merged manifest first.
+        // §11.2: the direct dialog REQUIRES the app to declare
+        // REQUEST_IGNORE_BATTERY_OPTIMIZATIONS itself (Play-policy caveat —
+        // the plugin never declares it). Undeclared/failed ⇒ report the true
+        // current state, never a hopeful one.
+        if (isIgnoringBatteryOpt()) {
+            callback(Result.success(true))
+            return
+        }
+        val declared =
+            runCatching {
+                context.packageManager.getPackageInfo(
+                    context.packageName, PackageManager.GET_PERMISSIONS,
+                ).requestedPermissions?.contains("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS") == true
+            }.getOrDefault(false)
+        if (declared) {
+            runCatching {
+                context.startActivity(
+                    Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                        .setData(Uri.parse("package:${context.packageName}"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+        }
+        // The dialog is asynchronous with no result surface for a plugin —
+        // report the state as of now; apps re-query snapshot() on resume.
         callback(Result.success(isIgnoringBatteryOpt()))
     }
 
@@ -155,8 +186,14 @@ internal class RingKitPermissionsApiImpl(private val context: Context) : RingKit
     }
 
     override fun openOemSettings(screen: OemScreen, callback: (Result<Boolean>) -> Unit) {
-        // §12 intent table is data-driven and lands in M3; false = not resolved.
-        callback(Result.success(false))
+        // §12 data-driven intent table (existence-checked; false = unresolved).
+        val mapped =
+            when (screen) {
+                OemScreen.AUTOSTART -> com.wibechat.ringkit.diag.OemSupport.Screen.AUTOSTART
+                OemScreen.LOCK_SCREEN_DISPLAY -> com.wibechat.ringkit.diag.OemSupport.Screen.LOCK_SCREEN_DISPLAY
+                OemScreen.BATTERY -> com.wibechat.ringkit.diag.OemSupport.Screen.BATTERY
+            }
+        callback(runCatching { com.wibechat.ringkit.diag.OemSupport.openScreen(context, mapped) })
     }
 
     // ── internals ────────────────────────────────────────────────────────
@@ -170,7 +207,10 @@ internal class RingKitPermissionsApiImpl(private val context: Context) : RingKit
     }
 
     private fun incomingChannelImportance(): NotificationImportance {
-        val channel = notificationManager.getNotificationChannel("ringkit_incoming_v1")
+        val suffix =
+            runCatching { RingKitCore.get(context).repository.currentConfig().channelSuffix }.getOrDefault("")
+        val channel =
+            notificationManager.getNotificationChannel(com.wibechat.ringkit.ui.RingKitChannels.incoming(suffix))
         return when (channel?.importance) {
             null, NotificationManager.IMPORTANCE_NONE -> NotificationImportance.NONE
             NotificationManager.IMPORTANCE_MIN -> NotificationImportance.MIN
@@ -184,8 +224,8 @@ internal class RingKitPermissionsApiImpl(private val context: Context) : RingKit
         OemInfo(
             manufacturer = Build.MANUFACTURER ?: "",
             brand = Build.BRAND ?: "",
-            // §12 detection table is M3; empty = no known restrictions recorded.
-            knownRestrictions = emptyList(),
+            // §12 data-driven detection table.
+            knownRestrictions = com.wibechat.ringkit.diag.OemSupport.knownRestrictions(),
         )
 
     private fun holdsPermission(permission: String): Boolean =

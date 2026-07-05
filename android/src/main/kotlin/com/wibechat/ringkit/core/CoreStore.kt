@@ -199,6 +199,33 @@ class CoreStore internal constructor(private val baseDir: File) {
         writeEnvelope(countersFile, org.json.JSONObject().put("droppedEvents", count))
     }
 
+    // ── diagnostics breadcrumbs (§11.3: last show result / delivery path) ─
+
+    private val diagStateFile = File(baseDir, "diag_state.json")
+
+    fun writeLastShowResult(result: String) {
+        mergeDiagState { it.put("lastShowResult", result) }
+    }
+
+    fun writeLastDeliveryPath(path: String) {
+        mergeDiagState { it.put("lastDeliveryPath", path) }
+    }
+
+    fun readLastShowResult(): String? =
+        readEnvelope(diagStateFile)?.optString("lastShowResult", "")?.takeIf { it.isNotBlank() }
+
+    fun readLastDeliveryPath(): String? =
+        readEnvelope(diagStateFile)?.optString("lastDeliveryPath", "")?.takeIf { it.isNotBlank() }
+
+    private fun mergeDiagState(mutate: (org.json.JSONObject) -> Unit) {
+        val current = readEnvelope(diagStateFile) ?: org.json.JSONObject()
+        mutate(current)
+        writeEnvelope(diagStateFile, current)
+    }
+
+    /** §11.3 event-log health: on-disk size of the events file. */
+    fun eventLogSizeBytes(): Long = if (eventsFile.exists()) eventsFile.length() else 0L
+
     // ── plumbing ─────────────────────────────────────────────────────────
 
     private fun readEnvelope(file: File): org.json.JSONObject? {

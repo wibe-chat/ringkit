@@ -127,9 +127,11 @@ internal class RingKitHostApiImpl(
 
     override fun takePendingEvents(callback: (Result<List<CallEventRecord>>) -> Unit) =
         onWriter(callback) {
-            core.repository.eventLog.takePending().map {
-                PigeonMapper.eventRecord(it, CoreDeliveryPath.REPLAYED)
+            val pending = core.repository.eventLog.takePending()
+            if (pending.isNotEmpty()) {
+                runCatching { core.store.writeLastDeliveryPath("replayed") }
             }
+            pending.map { PigeonMapper.eventRecord(it, CoreDeliveryPath.REPLAYED) }
         }
 
     override fun ackEvents(upToSeq: Long, deliveredSequences: List<Long>, callback: (Result<Unit>) -> Unit) =
@@ -159,25 +161,100 @@ internal class RingKitHostApiImpl(
 
     override fun diagnose(callback: (Result<DiagnosticsReport>) -> Unit) =
         onWriter(callback) {
-            // Diagnostics v1 lands in M3 (§11.3); this is the honest M2 subset.
+            // §11.3 diagnostics v1: reality-read findings + store health +
+            // last-show/last-delivery breadcrumbs + the ring-trace buffer.
             val log = core.repository.eventLog
+            val findings =
+                com.wibechat.ringkit.diag.DiagnosticsEngine.run(context, core).map { f ->
+                    DiagnosticsFinding(
+                        id = f.id,
+                        severity =
+                            when (f.severity) {
+                                com.wibechat.ringkit.diag.DiagnosticsEngine.Severity.INFO -> DiagnosticsSeverity.INFO
+                                com.wibechat.ringkit.diag.DiagnosticsEngine.Severity.WARNING -> DiagnosticsSeverity.WARNING
+                                com.wibechat.ringkit.diag.DiagnosticsEngine.Severity.ERROR -> DiagnosticsSeverity.ERROR
+                            },
+                        finding = f.finding,
+                        remedy = f.remedy,
+                        deepLink = f.deepLink,
+                    )
+                }.toMutableList()
+
+            // backgroundHandlerStale (§8.10): handles exist but no longer
+            // resolve — Flutter-aware, so checked here rather than in diag/.
+            core.store.readBackgroundHandles()?.let { (_, handler) ->
+                val resolvable =
+                    runCatching {
+                        io.flutter.view.FlutterCallbackInformation.lookupCallbackInformation(handler) != null
+                    }.getOrDefault(false)
+                if (!resolvable) {
+                    findings +=
+                        DiagnosticsFinding(
+                            id = "backgroundHandlerStale",
+                            severity = DiagnosticsSeverity.WARNING,
+                            finding =
+                                "The registered background handler handle no longer resolves " +
+                                    "(handles are not stable across app updates) — headless delivery degrades to replay.",
+                            remedy = "Re-register the handler on every launch (setBackgroundEventHandler).",
+                            deepLink = null,
+                        )
+                }
+            }
+
             DiagnosticsReport(
-                findings = emptyList(),
+                findings = findings,
                 eventLogHealth =
                     EventLogHealth(
-                        sizeBytes = 0L,
+                        sizeBytes = core.store.eventLogSizeBytes(),
                         unconsumedCount = log.unconsumedCount().toLong(),
                         droppedEvents = log.droppedCount().toLong(),
                         quarantinedEntries = core.store.quarantinedCount.toLong(),
                         activeLeases = log.activeLeaseCount().toLong(),
                     ),
-                lastShowResult = null,
-                lastDeliveryPath = null,
+                lastShowResult = lastShowResultFromStore(),
+                lastDeliveryPath =
+                    when (core.store.readLastDeliveryPath()) {
+                        "live" -> DeliveryPath.LIVE
+                        "replayed" -> DeliveryPath.REPLAYED
+                        "background" -> DeliveryPath.BACKGROUND
+                        else -> null
+                    },
                 ringTraces =
                     core.trace.buffer.entries.map { "[${it.tag}] ${it.callId ?: "-"}: ${it.message}" },
                 generatedAtEpochMs = core.time.wallMs(),
             )
         }
+
+    /** Rebuild the §6.4-composed ShowCallResult from the stored breadcrumb. */
+    private fun lastShowResultFromStore(): ShowCallResult? {
+        val raw = core.store.readLastShowResult() ?: return null
+        return runCatching {
+            val json = org.json.JSONObject(raw)
+            val fail = json.optString("fail", "").takeIf { it.isNotBlank() }
+            val degradations =
+                json.optJSONArray("degradations")?.let { arr ->
+                    (0 until arr.length()).map { DegradeReason.valueOf(arr.getString(it)) }
+                }.orEmpty()
+            when {
+                fail != null ->
+                    ShowCallResult(code = ShowCallResultCode.FAILED, failReason = FailReason.valueOf(fail))
+                degradations.isNotEmpty() ->
+                    ShowCallResult(code = ShowCallResultCode.DEGRADED, degradations = degradations)
+                else ->
+                    ShowCallResult(
+                        code =
+                            when (json.optString("outcome")) {
+                                "SHOWN" -> ShowCallResultCode.SHOWN
+                                "EXPIRED" -> ShowCallResultCode.EXPIRED
+                                "ALREADY_SHOWN" -> ShowCallResultCode.ALREADY_SHOWN
+                                "ALREADY_ACTIVE" -> ShowCallResultCode.ALREADY_ACTIVE
+                                "ALREADY_TERMINAL" -> ShowCallResultCode.ALREADY_TERMINAL
+                                else -> ShowCallResultCode.SHOWN
+                            },
+                    )
+            }
+        }.getOrNull()
+    }
 
     // ── flutterAsset ringtone extraction (§8.4: config-level only) ────────
 

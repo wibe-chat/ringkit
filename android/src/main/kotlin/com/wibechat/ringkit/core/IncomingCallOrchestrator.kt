@@ -82,7 +82,19 @@ class IncomingCallOrchestrator(
                 else -> ShowOutcome(result) // alreadyShown/alreadyActive/alreadyTerminal: reject·0
             }
         deliverLive(result, outcome.suppressReason)
+        recordLastShow(outcome)
         return outcome
+    }
+
+    /** §11.3 breadcrumb: diagnose() reports the last show result verbatim. */
+    private fun recordLastShow(outcome: ShowOutcome) {
+        runCatching {
+            val json = org.json.JSONObject()
+            json.put("outcome", outcome.result.outcome.name)
+            json.put("fail", outcome.failReason?.name)
+            json.put("degradations", org.json.JSONArray(outcome.degradations.map { it.name }))
+            core.store.writeLastShowResult(json.toString())
+        }
     }
 
     /** §5.2 eviction effects: victim teardown + missed-call from its snapshot. */
@@ -509,7 +521,10 @@ class IncomingCallOrchestrator(
             result.evictions.flatMap { it.result.persistedEvents } +
                 result.persistedEvents + result.liveEvents
         if (events.isEmpty()) return
-        core.liveSink?.invoke(events, suppress)
+        val sink = core.liveSink ?: return
+        sink(events, suppress)
+        // §11.3 breadcrumb — the last path an event took toward the app.
+        runCatching { core.store.writeLastDeliveryPath("live") }
     }
 
     private fun publish(callId: String, result: TransitionResult) {
