@@ -55,6 +55,8 @@ class NotificationFactoryTest {
         lockScreenBehavior: CoreLockScreenBehavior = CoreLockScreenBehavior.FULL_SCREEN,
         type: CoreCallType = CoreCallType.AUDIO,
         colors: CoreAccentColors = CoreAccentColors(),
+        state: CoreCallState = CoreCallState.RINGING,
+        connectedAtWallMs: Long? = null,
     ): CallRecord =
         CallRecord(
             info =
@@ -62,7 +64,7 @@ class NotificationFactoryTest {
                     id = "call-1", name = "Alice", handle = "+15550100", avatarUrl = null,
                     type = type, direction = CoreCallDirection.INCOMING, extra = emptyMap(),
                 ),
-            state = CoreCallState.RINGING,
+            state = state,
             options =
                 CoreCallOptions(
                     colors = colors,
@@ -76,6 +78,7 @@ class NotificationFactoryTest {
             ringDeadlineElapsedMs = time.elapsed + 45_000L,
             connectionDeadlineElapsedMs = null,
             surfacePosted = false,
+            connectedAtWallMs = connectedAtWallMs,
         )
 
     private val notificationManager: NotificationManager
@@ -278,17 +281,37 @@ class NotificationFactoryTest {
         assertEquals("Ring again", labelled.actions.single().title)
     }
 
-    // ── connecting surface (M2 staging; PLAN v1.3.2) ─────────────────────
+    // ── in-call surfaces (§8.2; PLAN v1.3.4) ─────────────────────────────
 
     @Test
-    fun connecting_surface_is_non_callstyle_with_hang_up() {
+    fun ongoing_fallback_is_non_callstyle_with_receiver_hang_up() {
         factory().ensureChannels()
-        val notification = factory().buildConnecting(record())
+        val notification = factory().buildOngoingFallback(record(state = CoreCallState.ACCEPTED))
         val template = notification.extras.getString(Notification.EXTRA_TEMPLATE) ?: ""
-        assertFalse("M2 connecting surface must NOT be CallStyle (no FGS yet)", template.contains("CallStyle"))
+        assertFalse("opt-out surface must NOT be CallStyle (no FGS ⇒ no validity)", template.contains("CallStyle"))
+        assertEquals("Connecting…", notification.extras.getString(Notification.EXTRA_TEXT))
         val hangUp = shadowOf(notification.actions.single().actionIntent).savedIntent
         assertEquals(RingKitIntents.ACTION_HANG_UP, hangUp.action)
         assertTrue(hangUp.flags and Intent.FLAG_RECEIVER_FOREGROUND != 0)
+    }
+
+    @Test
+    fun ongoing_surfaces_carry_state_content() {
+        factory().ensureChannels()
+        val outgoing = factory().buildOngoingFallback(record(state = CoreCallState.OUTGOING))
+        assertEquals("Calling…", outgoing.extras.getString(Notification.EXTRA_TEXT))
+
+        val active = factory().buildOngoingFallback(record(state = CoreCallState.ACTIVE, connectedAtWallMs = 1_751_700_777_000L))
+        assertTrue(active.extras.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER))
+        assertEquals("chronometer base = connect time", 1_751_700_777_000L, active.`when`)
+    }
+
+    @Test
+    fun ongoing_callstyle_build_has_no_fsi() {
+        factory().ensureChannels()
+        val notification = factory().buildOngoing(record(state = CoreCallState.ACCEPTED))
+        assertNull("ongoing surface never carries an FSI", notification.fullScreenIntent)
+        assertEquals("Connecting…", notification.extras.getString(Notification.EXTRA_TEXT))
     }
 
     // ── small icon (§8.2) ────────────────────────────────────────────────

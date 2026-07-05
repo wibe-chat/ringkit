@@ -180,8 +180,9 @@ class OrchestratorPipelineTest {
     // ── §4.3 action flows ────────────────────────────────────────────────
 
     @Test
-    fun r44_accept_from_action_persists_launch_action_and_posts_connecting() {
+    fun r44_accept_from_action_persists_launch_action_and_starts_ongoing_fgs() {
         orchestrator.showOnWriter(call())
+        startedServiceIntents.clear()
         val accept = orchestrator.acceptFromActionOnWriter("c-1")
 
         assertEquals(TransitionOutcome.OK, accept.result.outcome)
@@ -189,9 +190,12 @@ class OrchestratorPipelineTest {
         assertEquals(CoreEventType.ACCEPTED, accept.launch!!.type)
         assertFalse(accept.launch!!.alreadyEnded)
 
-        val connecting =
-            notificationManager.activeNotifications.single().notification
-        assertEquals("Connecting…", connecting.extras.getString(Notification.EXTRA_TEXT))
+        // The Connecting… surface is hosted by the ongoing FGS (M3, v1.3.4);
+        // its content is pinned in OngoingCallServiceTest.
+        assertTrue(
+            "accept starts the ongoing FGS",
+            startedServiceIntents.any { it.action == RingKitIntents.ACTION_ONGOING },
+        )
         assertEquals(CoreCallState.ACCEPTED, core.repository.callFor("c-1")!!.state)
         assertEquals("watchdog armed", 1, core.watchdogs.activeCount())
     }
@@ -429,11 +433,11 @@ class OrchestratorPipelineTest {
     }
 
     @Test
-    fun accept_keeps_connecting_surface_alive_through_service_stop() {
+    fun accept_keeps_connecting_surface_alive_through_ringing_service_stop() {
         orchestrator.showOnWriter(call())
-        val controller = Robolectric.buildService(RingingService::class.java)
-        controller.create()
-        controller.withIntent(
+        val ringing = Robolectric.buildService(RingingService::class.java)
+        ringing.create()
+        ringing.withIntent(
             RingKitIntents.withCall(Intent(context, RingingService::class.java), RingKitIntents.ACTION_RING, "c-1"),
         ).startCommand(0, 1)
         core.writer.await { }
@@ -442,12 +446,29 @@ class OrchestratorPipelineTest {
         core.writer.await { }
         shadowOf(android.os.Looper.getMainLooper()).idle()
 
-        val connecting = notificationManager.activeNotifications.single()
+        // Ringing FGS DETACHed (accepted → id reused); the ongoing FGS takes
+        // the id over and hosts the Connecting… surface (M3, v1.3.4).
+        val ongoing = Robolectric.buildService(com.wibechat.ringkit.services.OngoingCallService::class.java)
+        ongoing.create()
+        ongoing.withIntent(
+            RingKitIntents.withCall(
+                Intent(context, com.wibechat.ringkit.services.OngoingCallService::class.java),
+                RingKitIntents.ACTION_ONGOING,
+                "c-1",
+            ),
+        ).startCommand(0, 1)
+        core.writer.await { }
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        val posted = shadowOf(ongoing.get()).lastForegroundNotification
+        assertEquals("Connecting…", posted.extras.getString(Notification.EXTRA_TEXT))
         assertEquals(
-            "Connecting…",
-            connecting.notification.extras.getString(Notification.EXTRA_TEXT),
+            "ongoing surface reuses the call's notification id",
+            core.repository.notificationIdFor("c-1")!!,
+            shadowOf(ongoing.get()).lastForegroundNotificationId,
         )
-        controller.destroy()
+        ongoing.destroy()
+        ringing.destroy()
     }
 
     // ── trampoline (§4.3; r36 class) ─────────────────────────────────────

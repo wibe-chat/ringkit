@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import com.wibechat.ringkit.services.OngoingCallService
 import com.wibechat.ringkit.services.RingingService
 import com.wibechat.ringkit.ui.AvatarLoader
 import com.wibechat.ringkit.ui.CallNotificationFactory
@@ -276,6 +277,10 @@ class IncomingCallOrchestrator(
         return result
     }
 
+    /** §5.1 task-removal row (OngoingCallService.onTaskRemoved → here). */
+    fun taskRemovedOnWriter(callId: String): TransitionResult =
+        dispatchWithEffects(callId) { TransitionInput.TaskRemoved(callId) }
+
     /** Pre-dispatch record capture: terminal transitions erase the live record,
      *  but missed-call options and identity must survive into effect execution. */
     private inline fun dispatchWithEffects(callId: String, input: () -> TransitionInput): TransitionResult {
@@ -317,6 +322,7 @@ class IncomingCallOrchestrator(
 
     fun sweepNow(): SweepReport {
         val pre = repository.activeCalls().associateBy { it.callId }
+        core.refreshSweepEnv()
         val report = repository.sweep(core.sweepEnv)
         report.sweptCalls.forEach { (callId, result) ->
             ringLog.incident(RingLog.IncidentType.SWEEP_GHOST, "Orchestrator.sweepNow", callId)
@@ -345,14 +351,22 @@ class IncomingCallOrchestrator(
             if (notifId != null && CoreEffect.TEARDOWN_UI in result.effects) factory.cancel(notifId)
         }
         if (CoreEffect.STOP_ONGOING_SERVICE in result.effects) {
-            // OngoingCallService is M3; the connecting surface shares the call's
-            // notification id and was cancelled by TEARDOWN_UI above.
+            // The OngoingCallService observes the bus (§8.6): the publish below
+            // re-evaluates it — no in-call call left ⇒ it REMOVEs its surface
+            // and stops itself (an FGS-attached notification ignores cancel()).
         }
         if (CoreEffect.MISSED_CALL in result.effects) {
             postMissedFor(callId, repository.tombstoneFor(callId), pre?.options?.missedCall)
         }
-        if (CoreEffect.CONNECTING_SURFACE in result.effects && record != null) {
-            factory.postConnecting(record)
+        // In-call surfaces (§8.2/§4.3): the OngoingCallService hosts them as
+        // CallStyle-forOngoingCall (validity by FGS-attachment); opted out or
+        // FGS-denied ⇒ same-content non-CallStyle notify() fallback (v1.3.4).
+        val inCallSurface =
+            CoreEffect.CONNECTING_SURFACE in result.effects ||
+                CoreEffect.CALLING_SURFACE in result.effects ||
+                CoreEffect.CHRONOMETER_START in result.effects
+        if (inCallSurface && record != null) {
+            postInCallSurface(record, factory)
         }
         if (CoreEffect.ARM_WATCHDOG in result.effects && record?.connectionDeadlineElapsedMs != null) {
             core.watchdogs.arm(callId, record.connectionDeadlineElapsedMs - core.time.elapsedMs()) {
@@ -364,10 +378,6 @@ class IncomingCallOrchestrator(
         }
         if (CoreEffect.SILENT_RENOTIFY in result.effects && record != null) {
             renotify(record, factory)
-        }
-        if (CoreEffect.CALLING_SURFACE in result.effects) {
-            // OUTGOING surfaces land with OngoingCallService (M3) — traced only.
-            trace("effects", callId, "CALLING_SURFACE deferred to M3 (no ongoing service yet)")
         }
         // LAUNCH_APP is executed by AcceptTrampolineActivity itself (§4.3): only
         // an activity context may launch from the lock screen / background.
@@ -385,8 +395,36 @@ class IncomingCallOrchestrator(
                 )
                 kickOffAvatar(record, factory)
             }
-            CoreCallState.ACCEPTED, CoreCallState.ACTIVE -> factory.postConnecting(record)
-            CoreCallState.OUTGOING -> Unit // M3
+            CoreCallState.ACCEPTED, CoreCallState.ACTIVE, CoreCallState.OUTGOING ->
+                // Managed: the publish() after effects re-points the service
+                // with the fresh info; ensure-start self-heals a dead service.
+                postInCallSurface(record, factory)
+        }
+    }
+
+    /** Managed → (ensure-)start the ongoing FGS; opt-out/denied → notify() fallback. */
+    private fun postInCallSurface(record: CallRecord, factory: CallNotificationFactory) {
+        if (!repository.currentConfig().manageOngoingCall) {
+            factory.postOngoingFallback(record)
+            return
+        }
+        try {
+            val intent =
+                RingKitIntents.withCall(
+                    Intent(appContext, OngoingCallService::class.java),
+                    RingKitIntents.ACTION_ONGOING,
+                    record.callId,
+                )
+            serviceStarter(appContext, intent)
+        } catch (e: Exception) {
+            val denied =
+                (Build.VERSION.SDK_INT >= 31 && e is ForegroundServiceStartNotAllowedException) ||
+                    e is IllegalStateException || e is SecurityException
+            if (!denied) throw e
+            ringLog.incident(
+                RingLog.IncidentType.FGS_DENIED, "Orchestrator.postInCallSurface", record.callId,
+            )
+            factory.postOngoingFallback(record)
         }
     }
 

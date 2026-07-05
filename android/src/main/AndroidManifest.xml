@@ -73,5 +73,18 @@
             android:stopWithTask="false"
             android:foregroundServiceType="phoneCall" />
 
+        <!-- §8.1: in-call FGS (ACCEPTED/ACTIVE/OUTGOING surfaces); default ON,
+             opt-out manageOngoingCall:false. stopWithTask="false" so
+             onTaskRemoved fires → ENDED(failed) + stop (an orphan "in call"
+             notification is a lie). Apps holding RECORD_AUDIO may merge
+             foregroundServiceType="phoneCall|microphone" onto this service;
+             the mic type reaches startForeground only when declared AND
+             granted (§8.1). -->
+        <service
+            android:name="com.wibechat.ringkit.services.OngoingCallService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="phoneCall" />
+
     </application>
 </manifest>

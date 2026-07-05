@@ -21,6 +21,7 @@ object RingKitIntents {
     const val ACTION_HANG_UP = "com.wibechat.ringkit.HANG_UP"
     const val ACTION_MISSED_TAP = "com.wibechat.ringkit.MISSED_TAP"
     const val ACTION_SHOW_FULL_SCREEN = "com.wibechat.ringkit.SHOW_FULL_SCREEN"
+    const val ACTION_ONGOING = "com.wibechat.ringkit.ONGOING"
 
     const val EXTRA_CALL_ID = "ringkit.callId"
 

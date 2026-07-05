@@ -50,11 +50,30 @@ object RingKitCore {
          * Sweep probes (§8.10). The notification-presence check applies only to
          * calls that actually posted a surface, with a 10 s post-in-flight grace
          * (the FGS posts asynchronously moments after show marks the flag).
-         * ongoingServiceAlive stays `true` until OngoingCallService exists (M3)
-         * — a lie in the safe direction (never falsely sweeps ACTIVE calls).
+         * ongoingServiceAlive probes the real OngoingCallService, granting the
+         * same grace after `setCallConnected` — a sweep racing the service
+         * spin-up must never kill a fresh ACTIVE call (v1.3.4). Recomputed per
+         * sweep via [refreshSweepEnv].
          */
         @Volatile
-        var sweepEnv: SweepEnv =
+        var sweepEnv: SweepEnv = buildSweepEnv(ongoingAlive = true)
+            private set
+
+        /** Called on the writer at each sweep — captures the live service state. */
+        internal fun refreshSweepEnv() {
+            val connectGrace =
+                repository.activeCalls().any { record ->
+                    record.state == CoreCallState.ACTIVE &&
+                        time.elapsedMs() - (record.connectedAtElapsedMs ?: 0L) < POST_GRACE_MS
+                }
+            sweepEnv =
+                buildSweepEnv(
+                    ongoingAlive =
+                        com.wibechat.ringkit.services.OngoingCallService.isRunning || connectGrace,
+                )
+        }
+
+        private fun buildSweepEnv(ongoingAlive: Boolean): SweepEnv =
             SweepEnv(
                 notificationPresent = { callId ->
                     // Runs on the writer during sweep — repository reads are safe.
@@ -72,7 +91,7 @@ object RingKitCore {
                             }.getOrDefault(true)
                     }
                 },
-                ongoingServiceAlive = true,
+                ongoingServiceAlive = ongoingAlive,
             )
 
         /**

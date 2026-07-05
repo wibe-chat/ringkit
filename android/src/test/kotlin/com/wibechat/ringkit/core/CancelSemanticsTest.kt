@@ -38,6 +38,9 @@ class CancelSemanticsTest {
         context = ApplicationProvider.getApplicationContext()
         RingKitCore.resetForTests()
         core = RingKitCore.get(context)
+        // Fallback (notify()) in-call surfaces post synchronously — the cancel
+        // semantics under test are identical either way (M3.4).
+        core.repository.updateConfig(core.repository.currentConfig().copy(manageOngoingCall = false))
         orchestrator =
             IncomingCallOrchestrator(context, core) { _, intent ->
                 fgsStarts.add(RingKitIntents.callIdOf(intent) ?: "?")

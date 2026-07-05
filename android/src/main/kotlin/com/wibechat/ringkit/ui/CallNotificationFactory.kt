@@ -16,6 +16,7 @@ import com.wibechat.ringkit.R
 import com.wibechat.ringkit.core.CallActionReceiver
 import com.wibechat.ringkit.core.CallRecord
 import com.wibechat.ringkit.core.CoreCallInfo
+import com.wibechat.ringkit.core.CoreCallState
 import com.wibechat.ringkit.core.CoreCallType
 import com.wibechat.ringkit.core.CoreCancelReason
 import com.wibechat.ringkit.core.CoreConfig
@@ -300,38 +301,80 @@ class CallNotificationFactory(
         }
     }
 
-    // ── ACCEPTED-phase surface ───────────────────────────────────────────
+    // ── in-call surfaces (§8.2: ACCEPTED "Connecting…" / ACTIVE chronometer /
+    //    OUTGOING "Calling…"; hang-up → receiver) ──────────────────────────
 
     /**
-     * "Connecting…" after accept (§4.3). M2 stages this as NON-CallStyle:
-     * CallStyle validity demands FGS-attachment ∨ FSI for every CallStyle
-     * notification including ongoing ones, and OngoingCallService is M3
-     * (PLAN v1.3.2 changelog). Hang-up action → receiver.
+     * CallStyle `forOngoingCall` build — posted ONLY via the
+     * OngoingCallService's startForeground (validity by FGS-attachment,
+     * PLAN v1.3.4). The service applies the same IAE fallback the ringing
+     * path does.
      */
-    fun buildConnecting(record: CallRecord): Notification {
+    fun buildOngoing(record: CallRecord, avatar: Bitmap? = null): Notification {
         val notifId = requireNotNull(notificationIdHint(record.callId)) { "no registry id for ${record.callId}" }
-        return NotificationCompat.Builder(context, RingKitChannels.ongoing(config.channelSuffix))
-            .setSmallIcon(smallIcon())
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setContentTitle(record.info.name)
-            .setContentText(context.getString(R.string.ringkit_connecting))
-            .setVisibility(visibility(record.options.lockScreenVisibility))
-            .addAction(
-                0,
-                context.getString(R.string.ringkit_action_hang_up),
+        val style =
+            NotificationCompat.CallStyle.forOngoingCall(
+                person(record.info, avatar),
                 receiverPendingIntent(RingKitIntents.ACTION_HANG_UP, record.callId, notifId, 7),
             )
-            .build()
+        style.setIsVideo(record.info.type == CoreCallType.VIDEO)
+        val builder =
+            NotificationCompat.Builder(context, RingKitChannels.ongoing(config.channelSuffix))
+                .setSmallIcon(smallIcon())
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setVisibility(visibility(record.options.lockScreenVisibility))
+                .setContentTitle(record.info.name)
+                .setStyle(style)
+        record.options.colors.accentArgb?.let { builder.setColor(it) }
+        applyOngoingStateContent(builder, record)
+        return builder.build()
     }
 
-    fun postConnecting(record: CallRecord) {
+    /**
+     * Non-CallStyle in-call surface: the `manageOngoingCall: false` path (no
+     * FGS ⇒ CallStyle validity unavailable, PLAN v1.3.4) and the service's IAE
+     * fallback. Same state-based content, explicit hang-up action.
+     */
+    fun buildOngoingFallback(record: CallRecord): Notification {
+        val notifId = requireNotNull(notificationIdHint(record.callId)) { "no registry id for ${record.callId}" }
+        val builder =
+            NotificationCompat.Builder(context, RingKitChannels.ongoing(config.channelSuffix))
+                .setSmallIcon(smallIcon())
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setContentTitle(record.info.name)
+                .setVisibility(visibility(record.options.lockScreenVisibility))
+                .addAction(
+                    0,
+                    context.getString(R.string.ringkit_action_hang_up),
+                    receiverPendingIntent(RingKitIntents.ACTION_HANG_UP, record.callId, notifId, 7),
+                )
+        applyOngoingStateContent(builder, record)
+        return builder.build()
+    }
+
+    /** ACCEPTED → "Connecting…" · OUTGOING → "Calling…" · ACTIVE → chronometer (base = connect time). */
+    private fun applyOngoingStateContent(builder: NotificationCompat.Builder, record: CallRecord) {
+        when (record.state) {
+            CoreCallState.ACTIVE -> {
+                builder.setUsesChronometer(true)
+                builder.setWhen(record.connectedAtWallMs ?: time.wallMs())
+                builder.setShowWhen(true)
+            }
+            CoreCallState.OUTGOING -> builder.setContentText(context.getString(R.string.ringkit_calling))
+            else -> builder.setContentText(context.getString(R.string.ringkit_connecting))
+        }
+    }
+
+    fun postOngoingFallback(record: CallRecord) {
         val notifId = notificationIdHint(record.callId) ?: return
-        runCatching { notificationManager.notify(notifId, buildConnecting(record)) }
+        runCatching { notificationManager.notify(notifId, buildOngoingFallback(record)) }
             .onFailure {
                 ringLog.log(
-                    CoreLogLevel.ERROR, "notify", "CallNotificationFactory.postConnecting",
+                    CoreLogLevel.ERROR, "notify", "CallNotificationFactory.postOngoingFallback",
                     record.callId, "post failed", throwable = it,
                 )
             }
