@@ -102,7 +102,7 @@ if wait_for 5 "ringkit_log" "\[show\] outcome=SHOWN.*call=ks-timeout"; then
   pass "cold process rang (SHOWN traced)"
 else fail "no SHOWN trace for ks-timeout"; fi
 if wait_for 40 "missed_count" "^[1-9]"; then pass "missed-call posted after timeout"; else fail "no missed-call after timeout"; fi
-if [ "$(incoming_count)" = "0" ]; then pass "incoming torn down"; else fail "incoming lingers post-timeout"; fi
+if wait_for 10 "incoming_count" "^0$"; then pass "incoming torn down"; else fail "incoming lingers post-timeout"; fi
 relaunch
 if wait_for 45 "flutter_log" "#[0-9]+ CallTimedOut"; then
   pass "CallTimedOut replayed to Dart on relaunch"
@@ -126,7 +126,7 @@ MISSED_BEFORE=$(missed_count)
 sim_action ks-decline decline
 if wait_for 10 "ringkit_log" "\[receiver\]|DECLINED|reject" || true; then :; fi
 sleep 3
-if [ "$(incoming_count)" = "0" ]; then pass "incoming torn down on decline"; else fail "incoming lingers post-decline"; fi
+if wait_for 10 "incoming_count" "^0$"; then pass "incoming torn down on decline"; else fail "incoming lingers post-decline"; fi
 if [ "$(missed_count)" = "$MISSED_BEFORE" ]; then pass "decline posts NO missed-call (§4.3)"; else fail "decline posted a missed-call"; fi
 if $ADB shell dumpsys activity activities 2>/dev/null | grep -q "ResumedActivity.*$PKG"; then
   fail "decline launched the app (#768 regression)"
