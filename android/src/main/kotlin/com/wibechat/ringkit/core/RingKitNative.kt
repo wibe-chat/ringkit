@@ -24,6 +24,42 @@ object RingKitNative {
      * kill it BEFORE the show executes (§10.2's freezable-receiver reality —
      * observed on One UI/API 31).
      */
+    /**
+     * §7.4 cancel entry for custom native stacks (HMS, sockets): equivalent to
+     * a `rk.type=cancel` payload without requiring the rk.* map shape. Unknown
+     * ids write a pre-tombstone (out-of-order delivery, R41); cancel vs a
+     * locally-ACCEPTED/ACTIVE call is ignored + traced (§5.1). [reason] uses
+     * the §7.5 wire vocabulary (callerCancelled | answeredElsewhere |
+     * declinedElsewhere); null/unknown default to callerCancelled.
+     */
+    fun handleCancel(
+        context: Context,
+        callId: String,
+        reason: String? = null,
+        onProcessed: (() -> Unit)? = null,
+    ) {
+        val core = RingKitCore.get(context)
+        val mapped =
+            when (reason) {
+                "answeredElsewhere" -> CoreCancelReason.ANSWERED_ELSEWHERE
+                "declinedElsewhere" -> CoreCancelReason.DECLINED_ELSEWHERE
+                null, "", "callerCancelled" -> CoreCancelReason.CALLER_CANCELLED
+                else -> {
+                    core.trace.trace("wire", callId, "handleCancel reason invalid ($reason) — default callerCancelled")
+                    CoreCancelReason.CALLER_CANCELLED
+                }
+            }
+        core.writer.post {
+            try {
+                val orchestrator = IncomingCallOrchestrator(context, core)
+                orchestrator.sweepNow() // §8.10: every native entry point
+                orchestrator.cancelOnWriter(callId, mapped)
+            } finally {
+                onProcessed?.invoke()
+            }
+        }
+    }
+
     fun deliverPayload(
         context: Context,
         data: Map<String, String>,

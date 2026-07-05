@@ -68,6 +68,8 @@ class SimulateCallReceiver : BroadcastReceiver() {
                             "decline" -> orchestrator.declineOnWriter(callId)
                             "timeout" -> orchestrator.timeoutOnWriter(callId)
                             "hangup" -> orchestrator.endOnWriter(callId, CoreEndReason.LOCAL)
+                            // §5.1 far-end hangup of a LIVE call (M3.2 evidence).
+                            "endRemote" -> orchestrator.endOnWriter(callId, CoreEndReason.REMOTE)
                         }
                     } finally {
                         pending.finish()
