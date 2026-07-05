@@ -36,6 +36,17 @@ object RingKitCore {
         val bus: CallBus = CallBus(ringLog)
 
         /**
+         * §10.2 rung 1, source-agnostic: the adapter registers live delivery to
+         * the designated engine here; the orchestrator emits EVERY transition's
+         * events through it exactly once — receiver declines, service timeouts,
+         * sweep kills and evictions reach a live listener like any Dart-initiated
+         * command. Null (cold native process) ⇒ events wait in the log for
+         * replay. Suppress applies only to the live CallRinging (§8.11 rows).
+         */
+        @Volatile
+        var liveSink: ((events: List<CoreEvent>, suppress: CoreSuppressReason?) -> Unit)? = null
+
+        /**
          * Sweep probes (§8.10). The notification-presence check applies only to
          * calls that actually posted a surface, with a 10 s post-in-flight grace
          * (the FGS posts asynchronously moments after show marks the flag).

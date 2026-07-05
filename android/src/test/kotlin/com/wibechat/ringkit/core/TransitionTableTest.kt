@@ -80,6 +80,10 @@ class TransitionTableTest(private val case: TableCase) {
             return
         }
 
+        // §5.2 cap under test (eviction cases) — applied before any arrange.
+        if (case.given.has("maxRinging")) {
+            repo.updateConfig(repo.currentConfig().copy(maxConcurrentRinging = case.given.getInt("maxRinging")))
+        }
         arrangeState(case.state, case.given)
         val before = snapshot()
         val result = repo.dispatch(buildInput(case.input, case.given))
@@ -90,6 +94,12 @@ class TransitionTableTest(private val case: TableCase) {
 
     private fun arrangeState(state: String, given: JSONObject) {
         val missedShow = given.optJSONObject("arrange")?.optBoolean("missedCallShow", true) ?: true
+        // §5.2 multi-call arrangement: prior-1..N RINGING, oldest-first
+        // (prior-1 = the ringer-owner).
+        repeat(given.optInt("priorRinging", 0)) { i ->
+            val r = repo.dispatch(TransitionInput.Show(TestSupport.incomingCall(id = "prior-${i + 1}")))
+            check(r.outcome == TransitionOutcome.SHOWN) { "prior ring arrange failed: ${r.outcome}" }
+        }
         when (state) {
             "none" -> Unit
             "RINGING" -> showFresh(missedShow)
@@ -219,6 +229,7 @@ class TransitionTableTest(private val case: TableCase) {
             assertTrue("zero: no persisted events", result.persistedEvents.isEmpty())
             assertTrue("zero: no live events", result.liveEvents.isEmpty())
             assertTrue("zero: no effects", result.effects.isEmpty())
+            assertTrue("zero: no evictions", result.evictions.isEmpty())
             assertEquals("zero: log untouched", before.logSeqs, repo.eventLog.all().map { it.seq })
             assertEquals("zero: state unchanged", before.callState, repo.callFor(CALL_ID)?.state)
             assertEquals("zero: tombstone unchanged", before.tombstonePresent, repo.tombstoneFor(CALL_ID) != null)
@@ -314,6 +325,40 @@ class TransitionTableTest(private val case: TableCase) {
                 tc.getInt("count"),
                 repo.eventLog.all().count { it.type == type },
             )
+        }
+
+        // §5.2 cap evictions: side transitions of OTHER calls riding the result.
+        if (expect.has("evictions")) {
+            val want = expect.getJSONArray("evictions")
+            assertEquals("eviction count", want.length(), result.evictions.size)
+            for (i in 0 until want.length()) {
+                val e = want.getJSONObject(i)
+                val got = result.evictions[i]
+                assertEquals("eviction[$i] callId", e.getString("callId"), got.callId)
+                assertNull("evicted call has no live record", repo.callFor(got.callId))
+                if (e.optBoolean("tombstone")) {
+                    assertNotNull("evicted call tombstoned", repo.tombstoneFor(got.callId))
+                }
+                val wantEvents = e.getJSONArray("events")
+                assertEquals("eviction[$i] event count", wantEvents.length(), got.result.persistedEvents.size)
+                for (j in 0 until wantEvents.length()) {
+                    assertEquals(
+                        "eviction[$i] event[$j] type",
+                        wantEvents.getJSONObject(j).getString("type"),
+                        got.result.persistedEvents[j].type.name,
+                    )
+                }
+                val wantEffects =
+                    e.getJSONArray("effects").let { arr -> (0 until arr.length()).map { arr.getString(it) }.toSet() }
+                assertEquals("eviction[$i] effects", wantEffects, got.result.effects.map { it.name }.toSet())
+            }
+        }
+
+        // Survivor states after a multi-call transition (owner never evicted).
+        expect.optJSONObject("priorStates")?.let { ps ->
+            ps.keys().forEach { id ->
+                assertEquals("prior call $id state", ps.getString(id), repo.callFor(id)?.state?.name)
+            }
         }
     }
 

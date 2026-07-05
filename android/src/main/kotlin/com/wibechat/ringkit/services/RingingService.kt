@@ -70,6 +70,12 @@ class RingingService : Service() {
             )
         }
 
+        /** §5.2 waiting-call attention cue — writer-confined like every ring decision. */
+        fun waitingCue(context: Context, core: RingKitCore.Instance, callId: String) {
+            val record = core.repository.callFor(callId) ?: return
+            sharedPlayer(context, core).waitingCue(record)
+        }
+
         // One player per process: the fgsDenied path and the service must never
         // double-play; whoever stops next stops this instance.
         @Volatile
@@ -93,6 +99,7 @@ class RingingService : Service() {
 
     /** Writer-confined state. */
     private var audioOwnerCallId: String? = null
+    private var audioOwnerAudible = false
     private var foregroundCallId: String? = null
     private val timerTokens = HashMap<String, Any>()
 
@@ -275,19 +282,27 @@ class RingingService : Service() {
         if (owner == null || anyInCall) {
             if (audioOwnerCallId != null) {
                 audioOwnerCallId = null
+                audioOwnerAudible = false
                 player.stop()
             }
         } else if (audioOwnerCallId != owner.callId) {
             audioOwnerCallId = owner.callId
             player.stop()
             val outcome = player.start(owner, config.defaultRingtone, anyInCallState = false)
+            audioOwnerAudible = outcome.audible
             core.trace.trace(
                 "ring", owner.callId,
                 "audio start: engine=${outcome.engine} audible=${outcome.audible} policy=${outcome.resolution}",
             )
-            // §4.3: an inaudible ring arms the Doze-safe AlarmManager backstop
-            // (acceptable lateness = one maintenance window).
-            if (!outcome.audible) armNoAudioBackstop(owner)
+        }
+
+        // §4.3: every RINGING call without an audible ring gets the Doze-safe
+        // AlarmManager backstop — resolver-muted owners AND §5.2 waiting-silence
+        // calls (Handler timers can be Doze-deferred; acceptable lateness = one
+        // maintenance window). Re-arming replaces the same PI — idempotent.
+        ringing.forEach { record ->
+            val audiblyRinging = audioOwnerAudible && record.callId == audioOwnerCallId
+            if (!audiblyRinging) armNoAudioBackstop(record)
         }
 
         // Re-point the foreground notification when the owner changed (§5.2) —

@@ -4,10 +4,8 @@ import android.content.Context
 import com.wibechat.ringkit.core.CoreConfig
 import com.wibechat.ringkit.core.CoreDeliveryPath
 import com.wibechat.ringkit.core.CoreLogLevel
-import com.wibechat.ringkit.core.CoreSuppressReason
 import com.wibechat.ringkit.core.IncomingCallOrchestrator
 import com.wibechat.ringkit.core.RingKitCore
-import com.wibechat.ringkit.core.TransitionResult
 import com.wibechat.ringkit.ui.CallNotificationFactory
 import java.io.File
 import java.security.MessageDigest
@@ -41,14 +39,9 @@ internal class RingKitHostApiImpl(
         }
     }
 
-    /** Live-path delivery of this transition's events to the designated engine. */
-    private fun deliver(result: TransitionResult, suppress: CoreSuppressReason? = null) {
-        val records =
-            (result.persistedEvents + result.liveEvents).map {
-                PigeonMapper.eventRecord(it, CoreDeliveryPath.LIVE, suppress)
-            }
-        EngineRegistry.emitToDesignated(records)
-    }
+    // Live-path delivery happens INSIDE the orchestrator via core.liveSink
+    // (§10.2 rung 1, source-agnostic — registered in RingkitPlugin): host-API
+    // commands and native-origin transitions share one delivery point.
 
     override fun initialize(config: RingKitConfig, callback: (Result<Unit>) -> Unit) =
         onWriter(callback) {
@@ -65,7 +58,6 @@ internal class RingKitHostApiImpl(
     override fun showIncomingCall(call: IncomingCall, callback: (Result<ShowCallResult>) -> Unit) =
         onWriter(callback) {
             val outcome = orchestrator.showOnWriter(PigeonMapper.toCore(call))
-            deliver(outcome.result, outcome.suppressReason)
             PigeonMapper.showResult(outcome)
         }
 
@@ -73,49 +65,42 @@ internal class RingKitHostApiImpl(
         onWriter(callback) {
             // Programmatic accept (§4.3): same native path, no launch action.
             val result = orchestrator.acceptProgrammaticOnWriter(callId)
-            deliver(result)
             PigeonMapper.commandResult(result.outcome)
         }
 
     override fun declineCall(callId: String, callback: (Result<CallCommandResult>) -> Unit) =
         onWriter(callback) {
             val result = orchestrator.declineOnWriter(callId)
-            deliver(result)
             PigeonMapper.commandResult(result.outcome)
         }
 
     override fun endCall(callId: String, reason: EndReason, callback: (Result<CallCommandResult>) -> Unit) =
         onWriter(callback) {
             val result = orchestrator.endOnWriter(callId, PigeonMapper.endReasonToCore(reason))
-            deliver(result)
             PigeonMapper.commandResult(result.outcome)
         }
 
     override fun cancelCall(callId: String, reason: CancelReason, callback: (Result<CallCommandResult>) -> Unit) =
         onWriter(callback) {
             val result = orchestrator.cancelOnWriter(callId, PigeonMapper.cancelReasonToCore(reason))
-            deliver(result)
             PigeonMapper.commandResult(result.outcome)
         }
 
     override fun endAllCalls(callback: (Result<Unit>) -> Unit) =
         onWriter(callback) {
-            val result = orchestrator.endAllOnWriter()
-            deliver(result)
+            orchestrator.endAllOnWriter()
             Unit
         }
 
     override fun setCallConnected(callId: String, callback: (Result<CallCommandResult>) -> Unit) =
         onWriter(callback) {
             val result = orchestrator.setConnectedOnWriter(callId)
-            deliver(result)
             PigeonMapper.commandResult(result.outcome)
         }
 
     override fun startOutgoingCall(call: OutgoingCall, callback: (Result<ShowCallResult>) -> Unit) =
         onWriter(callback) {
             val result = orchestrator.startOutgoingOnWriter(PigeonMapper.toCore(call))
-            deliver(result)
             PigeonMapper.showResult(result.outcome)
         }
 
@@ -126,7 +111,6 @@ internal class RingKitHostApiImpl(
     ) =
         onWriter(callback) {
             val result = orchestrator.updateInfoOnWriter(callId, PigeonMapper.toCore(update))
-            deliver(result)
             PigeonMapper.commandResult(result.outcome)
         }
 

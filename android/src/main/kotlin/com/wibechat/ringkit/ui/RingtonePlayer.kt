@@ -122,6 +122,35 @@ class RingtonePlayer(
         )
     }
 
+    /**
+     * §5.2 short attention cue for a waiting call: one brief vibration pulse —
+     * never audio, never focus. Policy-resolved (silent/DND/vibrate honored);
+     * skipped while the owner's vibration loop holds the vibrator (a one-shot
+     * `vibrate()` would replace and kill the loop).
+     */
+    fun waitingCue(record: CallRecord) {
+        val personUri = record.info.handle?.let { "tel:$it" }
+        val policy =
+            RingPolicyResolver.resolve(context, record.options.vibrate, personUri, anyInCallState = false)
+        ringLog.log(
+            CoreLogLevel.INFO, "ring", "RingtonePlayer.waitingCue", record.callId, "waiting_cue",
+            mapOf("reason" to policy.reason, "vibrate" to policy.vibrate.toString(), "ownerVibrating" to vibrating.toString()),
+        )
+        if (!policy.vibrate || vibrating) return
+        try {
+            val effect = VibrationEffect.createWaveform(longArrayOf(0, 150, 120, 150), -1)
+            val vibrator = vibrator()
+            if (Build.VERSION.SDK_INT >= 33) {
+                vibrator.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_RINGTONE))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(effect, ringAttributes)
+            }
+        } catch (e: Exception) {
+            ringLog.log(CoreLogLevel.ERROR, "ring", "RingtonePlayer.waitingCue", record.callId, "cue failed", emptyMap(), e)
+        }
+    }
+
     /** Volume-key silence (§8.4: exists ONLY via IncomingCallActivity.onKeyDown). */
     fun silence(callId: String?) {
         ringLog.log(CoreLogLevel.INFO, "ring", "RingtonePlayer.silence", callId, "user_silenced")

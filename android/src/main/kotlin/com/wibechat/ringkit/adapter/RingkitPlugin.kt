@@ -23,6 +23,16 @@ class RingkitPlugin : FlutterPlugin, ActivityAware {
         engineId = System.identityHashCode(binding.binaryMessenger)
 
         EngineRegistry.register(engineId)
+        // §10.2 rung 1 bridge: the orchestrator emits EVERY transition's events
+        // (Dart-initiated AND native-origin — receiver declines, service
+        // timeouts, sweep kills, evictions) through this single sink; the
+        // registry resolves the designated engine at emission time, so one
+        // registration serves all engine churn.
+        instance.liveSink = { events, suppress ->
+            EngineRegistry.emitToDesignated(
+                events.map { PigeonMapper.eventRecord(it, com.wibechat.ringkit.core.CoreDeliveryPath.LIVE, suppress) },
+            )
+        }
         RingKitHostApi.setUp(
             binding.binaryMessenger,
             RingKitHostApiImpl(binding.applicationContext, instance, engineId),

@@ -54,25 +54,46 @@ class IncomingCallOrchestrator(
 
     fun showOnWriter(call: CoreIncomingCall): ShowOutcome {
         val result = repository.dispatch(TransitionInput.Show(call))
-        return when (result.outcome) {
-            TransitionOutcome.SHOWN -> {
-                val outcome = executeShow(call, result)
-                traceShow(call.id, outcome)
-                outcome
-            }
-            TransitionOutcome.EXPIRED -> {
-                // Staleness guard recorded TIMED_OUT directly (§5.2): the only
-                // effect is the missed-call surface — never a ring.
-                if (CoreEffect.MISSED_CALL in result.effects) {
-                    postMissedFor(call.id, repository.tombstoneFor(call.id), call.options.missedCall)
-                }
-                publish(call.id, result)
-                ShowOutcome(result)
-            }
-            TransitionOutcome.INVALID_PARAMS ->
-                ShowOutcome(result, failReason = CoreFailReason.INVALID_PARAMS)
-            else -> ShowOutcome(result) // alreadyShown/alreadyActive/alreadyTerminal: reject·0
+        // §5.2 cap evictions ride the admission result: execute the victims'
+        // teardown + missed-call surfaces BEFORE the new call's own effects.
+        result.evictions.forEach { eviction ->
+            executeEviction(eviction)
         }
+        val outcome =
+            when (result.outcome) {
+                TransitionOutcome.SHOWN -> {
+                    val o = executeShow(call, result)
+                    traceShow(call.id, o)
+                    o
+                }
+                TransitionOutcome.EXPIRED -> {
+                    // Dead on arrival (staleness guard / cap-1 eviction, §5.1):
+                    // TIMED_OUT recorded directly; the only effect is the
+                    // missed-call surface — never a ring.
+                    if (CoreEffect.MISSED_CALL in result.effects) {
+                        postMissedFor(call.id, repository.tombstoneFor(call.id), call.options.missedCall)
+                    }
+                    publish(call.id, result)
+                    ShowOutcome(result)
+                }
+                TransitionOutcome.INVALID_PARAMS ->
+                    ShowOutcome(result, failReason = CoreFailReason.INVALID_PARAMS)
+                else -> ShowOutcome(result) // alreadyShown/alreadyActive/alreadyTerminal: reject·0
+            }
+        deliverLive(result, outcome.suppressReason)
+        return outcome
+    }
+
+    /** §5.2 eviction effects: victim teardown + missed-call from its snapshot. */
+    private fun executeEviction(eviction: Eviction) {
+        val result = eviction.result
+        avatarLoader().cancel(eviction.callId)
+        core.watchdogs.cancel(eviction.callId)
+        repository.notificationIdFor(eviction.callId)?.let { factory().cancel(it) }
+        if (CoreEffect.MISSED_CALL in result.effects) {
+            postMissedFor(eviction.callId, repository.tombstoneFor(eviction.callId), eviction.missedCall)
+        }
+        publish(eviction.callId, result)
     }
 
     /**
@@ -121,11 +142,38 @@ class IncomingCallOrchestrator(
             degradations += CoreDegradeReason.FSI_DENIED
         }
 
+        // §5.2: one ringer-owner, first-come. Surface ownership and audio are
+        // distinct: the FGS posts the FIRST RINGING call's notification (this
+        // arrival is `waitingSurface` iff another RINGING call precedes it);
+        // audio-wise the arrival is WAITING-SILENCE if it either has a
+        // preceding ringer OR any call is in an in-call state (in-call
+        // demotion) — waiting-silence arrivals get the short cue, never the
+        // full ringtone.
+        val allCalls = repository.activeCalls()
+        val waitingSurface =
+            allCalls.firstOrNull { it.state == CoreCallState.RINGING }?.callId != call.id
+        val waitingSilence =
+            waitingSurface || allCalls.any { it.state != CoreCallState.RINGING }
+
         // Post + ring. Normal path: the ringing FGS posts the owner notification
         // via startForeground (both lock behaviors — §8.2). FGS denial → §8.11.
         val fgsStarted = startRingingService(call.id)
         if (fgsStarted) {
-            repository.markSurfacePosted(call.id)
+            if (waitingSurface) {
+                // §5.2 waiting call: notification + short attention cue only.
+                // The FGS posts only the OWNER's surface — a waiting call gets a
+                // plain notify() with the FSI ALWAYS attached, every mode (§8.2
+                // validity invariant holds without FGS attachment).
+                val post = factory.postIncoming(record, attachFsi = true)
+                if (post.callStyleRejected) degradations += CoreDegradeReason.CALL_STYLE_REJECTED
+                if (post.posted) repository.markSurfacePosted(call.id)
+            } else {
+                repository.markSurfacePosted(call.id)
+            }
+            // In-call arrivals keep the FGS surface but ring as waiting-silence
+            // (§5.2 demotion): the service's etiquette mutes the loop; the cue
+            // is the sanctioned attention signal.
+            if (waitingSilence) RingingService.waitingCue(appContext, core, call.id)
         } else {
             degradations += CoreDegradeReason.FGS_DENIED
             ringLog.incident(
@@ -134,14 +182,23 @@ class IncomingCallOrchestrator(
             )
             // Degraded direct post: CallStyle-valid via FSI (re-attached even in
             // notificationOnly mode — documented override, §8.2); the audible
-            // fallback channel supplies the ring the dead process can't.
+            // fallback channel supplies the ring the dead process can't. §5.2
+            // etiquette: only an audible ringer-owner may ring — a
+            // waiting-silence arrival gets its FSI-attached notification + the
+            // short cue, never the audible one-shot or the best-effort loop.
+            val wantAudibleOneShot = !waitingSilence
             val audibleHealthy = readback.audibleImportance >= NotificationManager.IMPORTANCE_DEFAULT
-            if (!audibleHealthy) degradations += CoreDegradeReason.CHANNEL_DEMOTED
-            val post = factory.postIncoming(record, attachFsi = true, onAudibleChannel = audibleHealthy)
+            if (wantAudibleOneShot && !audibleHealthy) degradations += CoreDegradeReason.CHANNEL_DEMOTED
+            val post =
+                factory.postIncoming(record, attachFsi = true, onAudibleChannel = wantAudibleOneShot && audibleHealthy)
             if (post.callStyleRejected) degradations += CoreDegradeReason.CALL_STYLE_REJECTED
             if (post.posted) repository.markSurfacePosted(call.id)
-            // In-process best-effort sound with the §8.3 honest lifetime.
-            RingingService.bestEffortInProcessRing(appContext, core, call.id)
+            if (waitingSilence) {
+                RingingService.waitingCue(appContext, core, call.id)
+            } else {
+                // In-process best-effort sound with the §8.3 honest lifetime.
+                RingingService.bestEffortInProcessRing(appContext, core, call.id)
+            }
         }
 
         // foregroundBehavior: fullScreen — the app WANTS the takeover even while
@@ -172,6 +229,7 @@ class IncomingCallOrchestrator(
         val pre = repository.callFor(callId)
         val result = repository.dispatch(TransitionInput.Accept(callId, fromAction = true))
         executeEffects(callId, result, pre)
+        deliverLive(result)
         return AcceptOutcome(result, result.launchActionSet)
     }
 
@@ -194,6 +252,7 @@ class IncomingCallOrchestrator(
         val pre = repository.activeCalls().associateBy { it.callId }
         val result = repository.dispatch(TransitionInput.EndAll)
         pre.keys.forEach { callId -> executeEffects(callId, result, pre[callId]) }
+        deliverLive(result)
         return result
     }
 
@@ -213,6 +272,7 @@ class IncomingCallOrchestrator(
             ringLog.incident(RingLog.IncidentType.WATCHDOG_FIRED, "Orchestrator.watchdogFire", callId)
         }
         executeEffects(callId, result, pre)
+        deliverLive(result)
         return result
     }
 
@@ -222,6 +282,7 @@ class IncomingCallOrchestrator(
         val pre = repository.callFor(callId)
         val result = repository.dispatch(input())
         executeEffects(callId, result, pre)
+        deliverLive(result)
         return result
     }
 
@@ -246,7 +307,9 @@ class IncomingCallOrchestrator(
         repository.eventLog.append(event)
         val launch = LaunchAction(CoreEventType.MISSED_CALL_TAPPED, info, seq, alreadyEnded = false)
         core.store.writeLaunchAction(launch)
-        publish(callId, TransitionResult(TransitionOutcome.OK, persistedEvents = listOf(event)))
+        val result = TransitionResult(TransitionOutcome.OK, persistedEvents = listOf(event))
+        publish(callId, result)
+        deliverLive(result)
         return launch
     }
 
@@ -258,6 +321,7 @@ class IncomingCallOrchestrator(
         report.sweptCalls.forEach { (callId, result) ->
             ringLog.incident(RingLog.IncidentType.SWEEP_GHOST, "Orchestrator.sweepNow", callId)
             executeEffects(callId, result, pre[callId])
+            deliverLive(result)
         }
         rearmWatchdogs()
         return report
@@ -394,6 +458,20 @@ class IncomingCallOrchestrator(
         val notificationManager =
             appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         return runCatching { notificationManager.canUseFullScreenIntent() }.getOrDefault(true)
+    }
+
+    /**
+     * §10.2 rung 1, exactly once per transition: evictions' events (older seqs)
+     * first, then the transition's own persisted + live events. The sink is the
+     * adapter's designated-engine bridge; null (cold native process) leaves
+     * persisted events in the log for replay.
+     */
+    private fun deliverLive(result: TransitionResult, suppress: CoreSuppressReason? = null) {
+        val events =
+            result.evictions.flatMap { it.result.persistedEvents } +
+                result.persistedEvents + result.liveEvents
+        if (events.isEmpty()) return
+        core.liveSink?.invoke(events, suppress)
     }
 
     private fun publish(callId: String, result: TransitionResult) {

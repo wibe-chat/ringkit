@@ -136,32 +136,48 @@ class CallRepository internal constructor(
             val age = (nowWall - call.sentAtWallMs).coerceAtLeast(0L)
             if (age > timeoutSeconds * 1000L) {
                 trace.trace("staleness", call.id, "expired: age=${age}ms > ${timeoutSeconds}s — recording TIMED_OUT")
-                allocateNotificationId(call.id)
-                val seq = eventLog.drawSeq()
-                val event = coreEvent(seq, info, CoreEventType.TIMED_OUT)
-                eventLog.append(event)
-                writeTombstone(
-                    Tombstone(
-                        callId = call.id,
-                        terminalType = TerminalType.TIMED_OUT,
-                        terminalEventSeq = seq,
-                        callInfo = info,
-                        atElapsedMs = nowElapsed,
-                        atWallMs = nowWall,
-                        bootCount = boot,
-                    ),
-                )
-                val effects =
-                    if (call.options.missedCall.show) setOf(CoreEffect.MISSED_CALL) else emptySet()
-                return TransitionResult(
-                    outcome = TransitionOutcome.EXPIRED,
-                    persistedEvents = listOf(event),
-                    effects = effects,
-                    warnings = warnings,
-                )
+                return deadOnArrival(call, info, warnings)
             }
         } else {
             warnings += "sentAt absent — staleness guard skipped (diagnostics warning)"
+        }
+
+        // §5.2 multi-call cap — eviction is evaluated at admission. The oldest
+        // waiting call (never the first-come ringer-owner) gets full TIMED_OUT
+        // semantics; with cap 1 there is no waiting slot and the arrival itself
+        // is the evictee (recorded TIMED_OUT directly, returns expired — G3).
+        val evictions = mutableListOf<Eviction>()
+        val ringingNow = calls.values.filter { it.state == CoreCallState.RINGING }
+        if (ringingNow.size >= config.maxConcurrentRinging) {
+            val waiting = ringingNow.drop(1)
+            if (waiting.isEmpty()) {
+                trace.trace("eviction", call.id, "cap=${config.maxConcurrentRinging}, owner-only — arrival recorded TIMED_OUT")
+                return deadOnArrival(call, info, warnings)
+            }
+            // A config-lowered cap can leave more than one call of overage.
+            var overage = ringingNow.size - config.maxConcurrentRinging + 1
+            for (victim in waiting) {
+                if (overage <= 0) break
+                trace.trace("eviction", victim.callId, "over cap on admission of ${call.id} — oldest waiting evicted")
+                val event = terminate(victim, CoreEventType.TIMED_OUT, TerminalType.TIMED_OUT)
+                evictions +=
+                    Eviction(
+                        callId = victim.callId,
+                        missedCall = victim.options.missedCall,
+                        result =
+                            TransitionResult(
+                                outcome = TransitionOutcome.OK,
+                                persistedEvents = listOf(event),
+                                effects =
+                                    buildSet {
+                                        add(CoreEffect.STOP_RING)
+                                        add(CoreEffect.TEARDOWN_UI)
+                                        if (victim.options.missedCall.show) add(CoreEffect.MISSED_CALL)
+                                    },
+                            ),
+                    )
+                overage--
+            }
         }
 
         allocateNotificationId(call.id)
@@ -188,6 +204,42 @@ class CallRepository internal constructor(
             outcome = TransitionOutcome.SHOWN,
             liveEvents = listOf(liveRinging),
             effects = setOf(CoreEffect.RING),
+            warnings = warnings,
+            evictions = evictions,
+        )
+    }
+
+    /**
+     * Shared dead-on-arrival shape (§5.1 show row): staleness guard + cap-1
+     * eviction both record TIMED_OUT + missed-call + tombstone directly, never
+     * ring, and return `expired`.
+     */
+    private fun deadOnArrival(
+        call: CoreIncomingCall,
+        info: CoreCallInfo,
+        warnings: List<String>,
+    ): TransitionResult {
+        allocateNotificationId(call.id)
+        val seq = eventLog.drawSeq()
+        val event = coreEvent(seq, info, CoreEventType.TIMED_OUT)
+        eventLog.append(event)
+        writeTombstone(
+            Tombstone(
+                callId = call.id,
+                terminalType = TerminalType.TIMED_OUT,
+                terminalEventSeq = seq,
+                callInfo = info,
+                atElapsedMs = time.elapsedMs(),
+                atWallMs = time.wallMs(),
+                bootCount = time.bootCount(),
+            ),
+        )
+        val effects =
+            if (call.options.missedCall.show) setOf(CoreEffect.MISSED_CALL) else emptySet()
+        return TransitionResult(
+            outcome = TransitionOutcome.EXPIRED,
+            persistedEvents = listOf(event),
+            effects = effects,
             warnings = warnings,
         )
     }
@@ -981,6 +1033,19 @@ data class TransitionResult(
     val warnings: List<String> = emptyList(),
     val launchActionSet: LaunchAction? = null,
     val preTombstoneWritten: Boolean = false,
+    /** §5.2 cap evictions performed by this admission (side transitions of OTHER calls). */
+    val evictions: List<Eviction> = emptyList(),
+)
+
+/**
+ * A §5.2 cap eviction: the oldest waiting call terminated (full TIMED_OUT
+ * semantics) to admit a new arrival. [missedCall] snapshots the victim's
+ * options — its live record is gone by the time effects execute.
+ */
+data class Eviction(
+    val callId: String,
+    val missedCall: CoreMissedCallOptions,
+    val result: TransitionResult,
 )
 
 /** Environment probes the sweep needs (§8.10). */

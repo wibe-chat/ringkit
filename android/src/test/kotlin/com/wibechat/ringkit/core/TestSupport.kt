@@ -51,6 +51,7 @@ object TestSupport {
         avatarUrl: String? = null,
         extra: Map<String, String> = emptyMap(),
         missedCallShow: Boolean = true,
+        lockScreenBehavior: CoreLockScreenBehavior = CoreLockScreenBehavior.FULL_SCREEN,
     ): CoreIncomingCall =
         CoreIncomingCall(
             id = id,
@@ -59,6 +60,10 @@ object TestSupport {
             timeoutSeconds = timeoutSeconds,
             sentAtWallMs = sentAtWallMs,
             extra = extra,
-            options = CoreCallOptions(missedCall = CoreMissedCallOptions(show = missedCallShow)),
+            options =
+                CoreCallOptions(
+                    missedCall = CoreMissedCallOptions(show = missedCallShow),
+                    lockScreenBehavior = lockScreenBehavior,
+                ),
         )
 }
