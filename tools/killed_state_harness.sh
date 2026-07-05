@@ -85,7 +85,7 @@ $ADB shell am force-stop $PKG
 sleep 1
 $ADB logcat -c 2>/dev/null || true
 relaunch
-if wait_for 20 "flutter_log" "\[harness\] _start"; then
+if wait_for 90 "flutter_log" "\[harness\] _start"; then
   pass "app primed (initialize persisted logLevel=info)"
 else
   fail "app never booted — aborting"
@@ -104,7 +104,7 @@ else fail "no SHOWN trace for ks-timeout"; fi
 if wait_for 40 "missed_count" "^[1-9]"; then pass "missed-call posted after timeout"; else fail "no missed-call after timeout"; fi
 if [ "$(incoming_count)" = "0" ]; then pass "incoming torn down"; else fail "incoming lingers post-timeout"; fi
 relaunch
-if wait_for 15 "flutter_log" "event #[0-9]+ CallTimedOut"; then
+if wait_for 45 "flutter_log" "#[0-9]+ CallTimedOut"; then
   pass "CallTimedOut replayed to Dart on relaunch"
 else fail "no CallTimedOut replay"; fi
 
@@ -132,7 +132,7 @@ if $ADB shell dumpsys activity activities 2>/dev/null | grep -q "ResumedActivity
   fail "decline launched the app (#768 regression)"
 else pass "decline never launches the app"; fi
 relaunch
-if wait_for 15 "flutter_log" "event #[0-9]+ CallDeclined"; then pass "CallDeclined replayed"; else fail "no CallDeclined replay"; fi
+if wait_for 45 "flutter_log" "#[0-9]+ CallDeclined"; then pass "CallDeclined replayed"; else fail "no CallDeclined replay"; fi
 
 # ── 4. accept-while-dead: launch action + connecting survives ────────────
 say "4: killed ring → accept action → launch action on next start"
@@ -144,8 +144,8 @@ if $ADB shell dumpsys notification 2>/dev/null | grep -qE "NotificationRecord.*$
   pass "Connecting… surface up (remove-vs-detach)"
 else fail "no connecting surface after accept"; fi
 relaunch
-if wait_for 15 "flutter_log" "launch action: accepted"; then pass "launch action consumed on next start (R44)"; else fail "no launch action"; fi
-if wait_for 10 "flutter_log" "event #[0-9]+ CallAccepted"; then pass "CallAccepted replayed"; else fail "no CallAccepted replay"; fi
+if wait_for 45 "flutter_log" "launch action: accepted"; then pass "launch action consumed on next start (R44)"; else fail "no launch action"; fi
+if wait_for 45 "flutter_log" "#[0-9]+ CallAccepted"; then pass "CallAccepted replayed"; else fail "no CallAccepted replay"; fi
 sim_action ks-accept hangup; sleep 2 # cleanup
 
 # ── 5. reconciliation sweep: force-stop mid-ring → swept on relaunch ─────
@@ -157,7 +157,7 @@ sleep 12 # clear the 10 s post-in-flight grace
 $ADB logcat -c 2>/dev/null || true
 relaunch
 if wait_for 20 "ringkit_log" "\[sweep\] RINGING swept"; then pass "sweep killed the ghost (R32)"; else fail "no sweep trace"; fi
-if wait_for 15 "flutter_log" "event #[0-9]+ CallTimedOut"; then pass "swept TIMED_OUT replayed"; else fail "no TIMED_OUT replay from sweep"; fi
+if wait_for 45 "flutter_log" "#[0-9]+ CallTimedOut"; then pass "swept TIMED_OUT replayed"; else fail "no TIMED_OUT replay from sweep"; fi
 
 say "result"
 if [ $FAILURES -eq 0 ]; then

@@ -107,9 +107,12 @@ jobs:
         # the §10.2 expedited-work branch + POST_NOTIFICATIONS · 34 = FSI
         # special access + FGS types · 36 = targetSdk (Robolectric can't).
         include:
+          # x86_64 everywhere: Flutter ships NO 32-bit x86 Android libs —
+          # an x86 image can never install the APK (INSTALL_FAILED_NO_MATCHING_ABIS,
+          # proven on the first emulator run).
           - api-level: 26
             target: default
-            arch: x86
+            arch: x86_64
           - api-level: 31
             target: default
             arch: x86_64
@@ -160,7 +163,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-${{ matrix.api-level }}-${{ matrix.target }}
+          key: avd-${{ matrix.api-level }}-${{ matrix.target }}-${{ matrix.arch }}
       - name: create AVD snapshot for caching
         if: steps.avd-cache.outputs.cache-hit != 'true'
         uses: reactivecircus/android-emulator-runner@v2

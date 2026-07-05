@@ -69,6 +69,8 @@ class _HarnessHomeState extends State<HarnessHome> {
   }
 
   Future<void> _start() async {
+    // Boot beacon — tools/killed_state_harness.sh greps this exact marker.
+    debugPrint('[harness] _start: subscribing');
     // §6.1 startup recipe: subscribe FIRST, then consume the launch action.
     RingKit.events.listen((CallEvent event) {
       final String detail = switch (event) {
