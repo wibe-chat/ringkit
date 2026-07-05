@@ -1,7 +1,7 @@
 name: ringkit
 description: "Android-only CallKit-style incoming-call UX: ring, full-screen, notification, and killed-state events. Signaling UX only — no RTC/media."
-version: 0.0.1
-homepage:
+version: 0.2.0
+homepage: https://github.com/Rishin-zartek/ringkit
 
 environment:
   sdk: ^3.12.2
