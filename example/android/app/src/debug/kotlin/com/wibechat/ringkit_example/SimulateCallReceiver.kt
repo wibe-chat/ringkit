@@ -44,6 +44,14 @@ class SimulateCallReceiver : BroadcastReceiver() {
                 passThrough(intent, data, "vibrate", "rk.vibrate")
                 passThrough(intent, data, "lockScreenBehavior", "rk.lockScreenBehavior")
                 passThrough(intent, data, "extra", "rk.extra")
+                // §14.3 latency probe: stamp payload-receipt time into rk.extra —
+                // it rides into every event; the harness prints
+                // receipt→transition latency on CallRinging.
+                runCatching {
+                    val extraJson = org.json.JSONObject(data["rk.extra"] ?: "{}")
+                    extraJson.put("probeReceiptMs", System.currentTimeMillis().toString())
+                    data["rk.extra"] = extraJson.toString()
+                }
             }
             "com.wibechat.ringkit_example.SIMULATE_CANCEL" -> {
                 data["rk.type"] = "cancel"
