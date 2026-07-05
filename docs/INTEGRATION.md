@@ -98,7 +98,7 @@ void _onCallEvent(CallEvent event) {
 }
 ```
 
-Show a call (typically from your FCM handler, §3):
+Show a call (typically from your FCM handler, next section):
 
 ```dart
 final result = await RingKit.showIncomingCall(IncomingCall(
@@ -116,7 +116,7 @@ final result = await RingKit.showIncomingCall(IncomingCall(
   ),
 ));
 
-// ALWAYS check the result — ringkit never fails silently (§8.11):
+// ALWAYS check the result — ringkit never fails silently:
 switch (result.code) {
   case ShowCallResultCode.shown:        break;                 // ringing
   case ShowCallResultCode.degraded:     /* ringing with caveats: result.degradations
@@ -124,7 +124,7 @@ switch (result.code) {
                                            heads-up instead of the full-screen UI */
   case ShowCallResultCode.failed:       /* NOT ringing: result.failReason
                                            (notificationsBlocked / channelBlocked / invalidParams)
-                                           → fix via the onboarding helpers (§6) */
+                                           → fix via the onboarding helpers (section 6) */
   case ShowCallResultCode.expired:      /* arrived after timeoutSeconds — missed-call posted,
                                            never rang (network-delayed push) */
   case ShowCallResultCode.alreadyShown: // duplicate push — idempotent, ignore
@@ -147,7 +147,7 @@ Future<void> firebaseBackgroundHandler(RemoteMessage message) async {
   final data = message.data;
   switch (data['rk.type']) {
     case 'incoming':
-      await RingKit.showIncomingCall(/* map fields as in §2 */);
+      await RingKit.showIncomingCall(/* map fields as in the quickstart */);
     case 'cancel':
       await RingKit.cancelCall(
         data['rk.callId']!,
@@ -258,7 +258,7 @@ Hang-ups: **you hang up** → `endCall(id)` (reason `local`); **far end hangs up
 
 ## 6. Permissions & onboarding (do this, or calls won't ring)
 
-ringkit **never prompts mid-ring**; it degrades visibly and tells you how (§2 result handling).
+ringkit **never prompts mid-ring**; it degrades visibly and tells you how (see the quickstart result handling).
 Put this in your onboarding/settings screen:
 
 ```dart
@@ -335,7 +335,7 @@ screen-recording of an incoming call ready).
 
 **Shipped and device-verified (v0.2.x = plan Phases 0–2):** everything above — full Mode 1
 lifecycle in all app states, multi-call, missed calls, outgoing leg, in-call service, killed-state
-replay + launch action, degradation reporting (§8.11), permissions helpers, diagnostics, OEM
+replay + launch action, degradation reporting, permissions helpers, diagnostics, OEM
 deep-link table.
 
 **Not yet — don't design around these until their phase lands:**
@@ -345,7 +345,7 @@ deep-link table.
 | `setBackgroundEventHandler` headless execution | **Phase 3.** Registration API exists, but events for a dead app currently arrive via **replay on next launch** — a decline-while-dead does NOT invoke your Dart handler yet. If your server must learn about declines immediately, poll/timeout server-side for now. |
 | Mode 2 native FCM fast path (< 300 ms killed-state ring, Dart never on the critical path) | Phase 3. One-line manifest enable when it ships; use `rk.*` payload keys now to be ready. |
 | Telecom integration (`telecomIntegration: true`, `setAudioRoute`, Bluetooth/watch answer buttons) | Phase 4. `setAudioRoute` returns `wrongState` today. Keep `telecomIntegration: false`. |
-| Remote telemetry upload | SCOPE-2 (in progress). The `telemetry` config field is accepted but inert — nothing leaves the device. |
+| Remote telemetry upload | In progress. The `telemetry` config field is accepted but inert — nothing leaves the device. |
 | iOS | Never (by design). |
 
 ---
@@ -355,5 +355,5 @@ deep-link table.
 1. Reproduce, then grab `await RingKit.diagnose()` output (serializable) — attach it to the issue.
 2. `adb logcat -s RingKit:V` around the incident gives the per-call ring trace (why it did what
    it did, including deliberate silence like DND).
-3. The full engineering spec lives in `PLAN.md` in the repo; the state machine (§5.1) defines the
-   exact behavior of every command in every state.
+3. The state machine is exhaustively defined: every command in every call state has a specified,
+   generated-test-backed outcome — if behavior looks surprising, the ring trace will say why.

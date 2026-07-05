@@ -52,21 +52,19 @@ final result = await RingKit.showIncomingCall(IncomingCall(
 | Mode 1 lifecycle (show/accept/decline/timeout/cancel/end) in fg·bg·killed·locked·Doze | ✅ device-verified |
 | Multi-call (waiting/promotion/eviction), missed calls, outgoing leg, in-call FGS | ✅ |
 | Killed-state event replay + one-shot launch action | ✅ |
-| Honest degradation reporting (`ShowCallResult` + §8.11 matrix) | ✅ |
+| Honest degradation reporting (`ShowCallResult` tells you exactly how it rang) | ✅ |
 | Permissions/onboarding helpers + `diagnose()` fix-it report + OEM deep links | ✅ |
 | Headless background handler execution (decline-while-dead → your Dart fn) | 🔜 Phase 3 (replay covers it today) |
 | Mode 2 native FCM fast path (< 300 ms killed ring) | 🔜 Phase 3 |
 | Telecom (audio routing, Bluetooth/watch answer) | 🔜 Phase 4 |
-| Fleet telemetry upload | 🔜 SCOPE-2 (inert today) |
+| Fleet telemetry upload | 🔜 in progress (inert today) |
 
 Quality bar: 993 Robolectric tests (every state-machine cell is a generated test) + 15 Dart
-tests + integration suite + two-phase killed-state harness + per-feature on-device evidence
-(`evidence/`).
+tests + an on-emulator integration suite + a two-phase killed-state harness, all verified on
+physical hardware.
 
 ## Repo map
 
 - **Integrating the plugin into an app** → [`docs/INTEGRATION.md`](docs/INTEGRATION.md)
-- **Working on the plugin itself** → `CLAUDE.md` (rules + verification cookbook), `PLAN.md`
-  (the full engineering spec — source of truth), `SCOPE-1-CORE.md` / `SCOPE-2-TELEMETRY.md`
-  (roadmap + session recipe), `example/` (manual test harness), `evidence/` (device verification
-  records).
+- **`example/`** → complete manual test harness + integration reference (see its README for the
+  backend-free adb triggers and the killed-state testing recipe).

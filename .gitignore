@@ -34,3 +34,10 @@ migrate_working_dir/
 
 # Claude session state
 .claude/
+
+# Internal engineering docs — kept local, never published
+PLAN.md
+CLAUDE.md
+SCOPE-1-CORE.md
+SCOPE-2-TELEMETRY.md
+evidence/

@@ -1,9 +1,9 @@
 # ringkit_example
 
-The **manual test harness + integration reference** for ringkit (PLAN §15) — not a demo.
+The **manual test harness + integration reference** for ringkit — not a demo.
 Three tabs: **Harness** (every call scenario + live event console with `deliveryPath`/`sequence`
 badges + latency probe), **Diagnostics** (`diagnose()` as a fix-it checklist with deep links +
-ring-trace viewer), **Permissions** (the recommended §11.2 onboarding flow).
+ring-trace viewer), **Permissions** (the recommended onboarding flow).
 
 ## Backend-free triggers (adb)
 
@@ -18,7 +18,7 @@ adb shell am broadcast -n $PKG/.SimulateCallReceiver -a $PKG.SIMULATE_UPDATE --e
 ```
 
 Every `SIMULATE_CALL` stamps `probeReceiptMs` into `extra` — the harness console prints the
-**receipt→transition latency** per call (§14.3 gate).
+**receipt→transition latency** per call.
 
 ## How to test killed-state in 60 seconds
 
@@ -28,7 +28,7 @@ Every `SIMULATE_CALL` stamps `probeReceiptMs` into `extra` — the harness conso
 3. Relaunch the app: the event console replays the outcome (`[replayed]` badge) and, for accept,
    `consumeLaunchAction()` reports the one-shot launch cause with the same sequence number.
 
-**The trap (§7.1):** *swipe-away / `am kill` = killed* — FCM (and these local triggers) still
+**The trap:** *swipe-away / `am kill` = killed* — FCM (and these local triggers) still
 arrive. **Settings → Force stop / `adb shell am force-stop` = STOPPED state** — Android delivers
 *nothing* (no FCM, no broadcasts) until the user relaunches the app. A stopped app that "doesn't
 ring" is OS design, not a plugin bug. `am force-stop` also clears the FCM temp-allowlist mirror,
@@ -38,4 +38,4 @@ so use `am kill` for killed-state tests.
 
 Real-push wiring (`firebase_messaging` + `tools/send_call.sh`, HTTP v1 + service account) lands
 with the Mode-2 milestone — this harness is deliberately Firebase-free until then so the
-no-Firebase consumer build stays honest (§7.3 guard).
+no-Firebase consumer build stays honest.
