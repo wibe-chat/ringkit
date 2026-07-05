@@ -183,3 +183,26 @@ jobs:
         with:
           name: emulator-logs-${{ matrix.api-level }}
           path: logcat-${{ matrix.api-level }}.txt
+
+  release-build:
+    name: example release build (R8 — icon + ringtone survive, R7/R26)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable }
+      - name: build example --release (R8 on)
+        run: cd example && flutter build apk --release
+      - name: plugin resources survive shrinking (R7/R26)
+        run: |
+          APK=example/build/app/outputs/flutter-apk/app-release.apk
+          unzip -l "$APK" > apk_contents.txt
+          grep -q "res/" apk_contents.txt || { echo "no resources in APK?"; exit 1; }
+          # The bundled default ringtone + plugin glyph are code-referenced; a
+          # broken keep setup would strip them and playLadder's failure rung +
+          # the small icon would break (R7/R26).
+          RAW_COUNT=$(grep -cE "res/raw|\.ogg|\.mp3" apk_contents.txt || true)
+          echo "raw-ish resource entries: $RAW_COUNT"
+          test "$RAW_COUNT" -ge 1

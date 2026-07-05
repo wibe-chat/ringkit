@@ -295,6 +295,27 @@ class IncomingCallActivity : Activity() {
                 isClickable = true
                 isFocusable = true
                 setOnClickListener { onTap() }
+                // §8.5 a11y: announce as a Button with a labelled click action
+                // (TalkBack then reads "<a11y>, button — double-tap to <a11y>").
+                androidx.core.view.ViewCompat.setAccessibilityDelegate(
+                    this,
+                    object : androidx.core.view.AccessibilityDelegateCompat() {
+                        override fun onInitializeAccessibilityNodeInfo(
+                            host: android.view.View,
+                            info: androidx.core.view.accessibility.AccessibilityNodeInfoCompat,
+                        ) {
+                            super.onInitializeAccessibilityNodeInfo(host, info)
+                            info.className = android.widget.Button::class.java.name
+                            info.addAction(
+                                androidx.core.view.accessibility.AccessibilityNodeInfoCompat
+                                    .AccessibilityActionCompat(
+                                        androidx.core.view.accessibility.AccessibilityNodeInfoCompat.ACTION_CLICK,
+                                        a11y,
+                                    ),
+                            )
+                        }
+                    },
+                )
             }
             return LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
