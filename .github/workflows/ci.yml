@@ -124,6 +124,16 @@ jobs:
             arch: x86_64
     steps:
       - uses: actions/checkout@v4
+      - name: free runner disk space
+        # First run proved the emulator dies with "FATAL | Not enough space to
+        # create userdata partition" (~3 GB free vs 7.3 GB needed): drop the
+        # preinstalled toolchains this job never uses.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk \
+            /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/powershell /usr/share/swift
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
       - name: enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -159,6 +169,7 @@ jobs:
           target: ${{ matrix.target }}
           arch: ${{ matrix.arch }}
           force-avd-creation: false
+          disk-size: 4096M
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: false
           script: echo "AVD snapshot created"
@@ -169,6 +180,7 @@ jobs:
           target: ${{ matrix.target }}
           arch: ${{ matrix.arch }}
           force-avd-creation: false
+          disk-size: 4096M
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
@@ -181,7 +193,8 @@ jobs:
             cd example && flutter test integration_test/ring_flow_test.dart -d "$(adb devices | awk 'NR==2{print $1}')"
       - name: upload logcat on failure
         if: failure()
-        run: adb logcat -d > logcat-${{ matrix.api-level }}.txt || true
+        # timeout guard: with a dead emulator this hung 45 min on the first run.
+        run: timeout 60 adb logcat -d > logcat-${{ matrix.api-level }}.txt || true
       - name: upload logcat artifact
         if: failure()
         uses: actions/upload-artifact@v4
