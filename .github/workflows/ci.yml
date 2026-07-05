@@ -9,6 +9,11 @@ on:
     branches: [main]
   pull_request:
 
+# Private repo = billed minutes: a newer push supersedes the in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   guards:
     name: architecture guards
@@ -198,11 +203,17 @@ jobs:
       - name: plugin resources survive shrinking (R7/R26)
         run: |
           APK=example/build/app/outputs/flutter-apk/app-release.apk
-          unzip -l "$APK" > apk_contents.txt
-          grep -q "res/" apk_contents.txt || { echo "no resources in APK?"; exit 1; }
-          # The bundled default ringtone + plugin glyph are code-referenced; a
-          # broken keep setup would strip them and playLadder's failure rung +
-          # the small icon would break (R7/R26).
-          RAW_COUNT=$(grep -cE "res/raw|\.ogg|\.mp3" apk_contents.txt || true)
-          echo "raw-ish resource entries: $RAW_COUNT"
-          test "$RAW_COUNT" -ge 1
+          # Release resource optimization SHORTENS/obfuscates paths
+          # (res/raw/x.wav → res/Tn.wav), so assert by CONTENT, not name:
+          # the bundled default ringtone is a RIFF/WAV — if the shrinker ate
+          # it, the ringtone ladder's failure rung is gone (R7/R26).
+          ENTRIES=$(unzip -Z1 "$APK" | grep -c "^res/")
+          echo "res/ entries: $ENTRIES"
+          test "$ENTRIES" -ge 1
+          FOUND=""
+          for f in $(unzip -Z1 "$APK" | grep "^res/"); do
+            SIG=$(unzip -p "$APK" "$f" 2>/dev/null | head -c 4)
+            if [ "$SIG" = "RIFF" ]; then FOUND="$f"; break; fi
+          done
+          echo "WAV ringtone payload: ${FOUND:-MISSING}"
+          test -n "$FOUND"
