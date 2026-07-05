@@ -205,8 +205,13 @@ jobs:
           name: emulator-logs-${{ matrix.api-level }}
           path: logcat-${{ matrix.api-level }}.txt
 
+  # Doubles as the no-Firebase consumer build until fcm/ lands (Phase 3): the
+  # example is deliberately Firebase-free, so a green release build IS the
+  # "consumer without firebase_messaging" proof. When RingKitMessagingService
+  # (compileOnly firebase + -dontwarn consumer rule) arrives, split a dedicated
+  # minimal-consumer job per §14.2.
   release-build:
-    name: example release build (R8 — icon + ringtone survive, R7/R26)
+    name: example release build (AGP 9.x · Firebase-free · R8 survival R7/R26)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -233,3 +238,20 @@ jobs:
           done
           echo "WAV ringtone payload: ${FOUND:-MISSING}"
           test -n "$FOUND"
+
+  consumer-agp8:
+    name: consumer build — AGP 8.11 (KGP-free plugin under an AGP 8.x app)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable }
+      - name: pin the example app to AGP 8.11.1
+        run: |
+          sed -i 's/id("com.android.application") version "9.0.1"/id("com.android.application") version "8.11.1"/' \
+            example/android/settings.gradle.kts
+          grep -q 'version "8.11.1"' example/android/settings.gradle.kts || { echo "AGP pin sed missed"; exit 1; }
+      - name: build example --release under AGP 8.x (validated locally 2026-07-06)
+        run: cd example && flutter build apk --release
