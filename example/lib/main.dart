@@ -40,14 +40,20 @@ class _RingKitExampleAppState extends State<RingKitExampleApp> {
   }
 
   Future<void> _start() async {
+    debugPrint('[harness] _start: subscribing');
     // Subscribe FIRST, then consume the launch action (§6.1 startup recipe).
-    RingKit.events.listen((CallEvent event) {
-      _append(
-        '#${event.sequence} ${event.runtimeType} (${event.deliveryPath.name}) '
-        '· ${event.call.name}',
-      );
-      unawaited(_refreshActive());
-    });
+    RingKit.events.listen(
+      (CallEvent event) {
+        debugPrint('[harness] event #${event.sequence} ${event.runtimeType}');
+        _append(
+          '#${event.sequence} ${event.runtimeType} (${event.deliveryPath.name}) '
+          '· ${event.call.name}',
+        );
+        unawaited(_refreshActive());
+      },
+      onError: (Object e, StackTrace s) =>
+          debugPrint('[harness] events stream error: $e\n$s'),
+    );
     await RingKit.initialize(
       RingKitConfig(
         incomingChannelName: 'Incoming calls',
@@ -65,7 +71,9 @@ class _RingKitExampleAppState extends State<RingKitExampleApp> {
         channelSuffix: '',
       ),
     );
+    debugPrint('[harness] initialize done; consuming launch action');
     final launch = await RingKit.consumeLaunchAction();
+    debugPrint('[harness] launch action: ${launch?.type.name} seq=${launch?.sequence}');
     if (launch != null) {
       _append(
         '▶ launch action: ${launch.type.name} seq=${launch.sequence}'

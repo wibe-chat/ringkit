@@ -211,13 +211,20 @@ class OrchestratorPipelineTest {
     }
 
     @Test
-    fun timeout_posts_missed_call_with_default_copy() {
+    fun timeout_posts_missed_call_with_default_copy_in_its_own_id_band() {
         orchestrator.showOnWriter(call())
+        val incomingId = core.repository.notificationIdFor("c-1")!!
         val result = orchestrator.timeoutOnWriter("c-1")
 
         assertEquals(TransitionOutcome.OK, result.outcome)
-        val missed = notificationManager.activeNotifications.single().notification
-        assertEquals("Missed call", missed.extras.getString(Notification.EXTRA_TITLE))
+        val posted = notificationManager.activeNotifications.single()
+        assertEquals("Missed call", posted.notification.extras.getString(Notification.EXTRA_TITLE))
+        // Device-found regression: the FGS's STOP_FOREGROUND_REMOVE destroys a
+        // missed-call posted under the call's own id — the band must differ.
+        assertEquals(
+            com.wibechat.ringkit.ui.CallNotificationFactory.missedIdFor(incomingId),
+            posted.id,
+        )
     }
 
     @Test
@@ -407,11 +414,39 @@ class OrchestratorPipelineTest {
         assertNotNull(owner)
         assertNotNull("owner notification carries the FSI in fullScreen mode", owner.fullScreenIntent)
 
-        // Terminal transition → bus → service re-evaluates → stops itself.
+        // Terminal transition → bus → service re-evaluates → stops itself,
+        // REMOVING its notification: cancel() is a no-op on an FGS-attached
+        // notification, so the terminal path must remove here (device-found).
         orchestrator.declineOnWriter("c-1")
         core.writer.await { }
         shadowOf(android.os.Looper.getMainLooper()).idle()
         assertTrue(shadow.isStoppedBySelf)
+        assertTrue(
+            "terminal foreground call ⇒ REMOVE (orchestrator cancel was a no-op)",
+            shadow.notificationShouldRemoved,
+        )
+        controller.destroy()
+    }
+
+    @Test
+    fun accept_keeps_connecting_surface_alive_through_service_stop() {
+        orchestrator.showOnWriter(call())
+        val controller = Robolectric.buildService(RingingService::class.java)
+        controller.create()
+        controller.withIntent(
+            RingKitIntents.withCall(Intent(context, RingingService::class.java), RingKitIntents.ACTION_RING, "c-1"),
+        ).startCommand(0, 1)
+        core.writer.await { }
+
+        orchestrator.acceptFromActionOnWriter("c-1")
+        core.writer.await { }
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        val connecting = notificationManager.activeNotifications.single()
+        assertEquals(
+            "Connecting…",
+            connecting.notification.extras.getString(Notification.EXTRA_TEXT),
+        )
         controller.destroy()
     }
 

@@ -243,8 +243,20 @@ class RingingService : Service() {
             sharedPlayer(this, core).stop()
             timerTokens.values.forEach { main.removeCallbacksAndMessages(it) }
             timerTokens.clear()
+            // Remove-vs-detach (both found on-device, SM-G781B): while the
+            // notification is FGS-attached the orchestrator's cancel() is a
+            // silent no-op, so a TERMINAL call's incoming notification must be
+            // REMOVEd here — but an ACCEPTED call just re-used its id for the
+            // "Connecting…" surface, which REMOVE would destroy → DETACH.
+            val foregroundCallLive =
+                foregroundCallId?.let { core.repository.callFor(it) }?.state
+                    ?.let { it != CoreCallState.RINGING } == true
             main.post {
-                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                ServiceCompat.stopForeground(
+                    this,
+                    if (foregroundCallLive) ServiceCompat.STOP_FOREGROUND_DETACH
+                    else ServiceCompat.STOP_FOREGROUND_REMOVE,
+                )
                 stopSelf()
             }
             return

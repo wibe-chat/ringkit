@@ -63,6 +63,16 @@ class CallNotificationFactory(
     private val notifier: ((Int, Notification) -> Unit)? = null,
 ) {
     companion object {
+        /**
+         * Missed-call notifications live in their own id band: the ringing FGS
+         * detaches with STOP_FOREGROUND_REMOVE on its (call-id-keyed) foreground
+         * notification, which would destroy a missed-call posted under the same
+         * id moments earlier (found on-device, SM-G781B).
+         */
+        const val MISSED_ID_OFFSET = 100_000
+
+        fun missedIdFor(notifId: Int): Int = notifId + MISSED_ID_OFFSET
+
         /** Loud-once cache for §8.2 small-icon resolution (unresolvable → glyph + error log). */
         @Volatile
         private var resolvedSmallIcon: Pair<String?, Int>? = null
@@ -357,7 +367,9 @@ class CallNotificationFactory(
     }
 
     fun postMissed(info: CoreCallInfo, reason: CoreCancelReason?, options: CoreMissedCallOptions, notifId: Int) {
-        runCatching { notificationManager.notify(notifId, buildMissed(info, reason, options, notifId)) }
+        // Own id band — never the call's id (the FGS REMOVE would eat it).
+        val missedId = missedIdFor(notifId)
+        runCatching { notificationManager.notify(missedId, buildMissed(info, reason, options, missedId)) }
             .onFailure {
                 ringLog.log(
                     CoreLogLevel.ERROR, "notify", "CallNotificationFactory.postMissed",

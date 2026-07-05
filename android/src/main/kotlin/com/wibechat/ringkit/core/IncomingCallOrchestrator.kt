@@ -227,7 +227,9 @@ class IncomingCallOrchestrator(
 
     /** Missed-call tap (§4.3): auto-cancel FIRST, then event + launch action. */
     fun missedTappedOnWriter(callId: String): LaunchAction? {
-        repository.notificationIdFor(callId)?.let { factory().cancel(it) }
+        repository.notificationIdFor(callId)?.let {
+            factory().cancel(CallNotificationFactory.missedIdFor(it))
+        }
         val tombstone = repository.tombstoneFor(callId) ?: return null
         val info = tombstone.callInfo ?: return null
         val seq = repository.eventLog.drawSeq()
