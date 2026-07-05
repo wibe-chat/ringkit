@@ -1,6 +1,7 @@
-# SCOPE-1 M0 CI skeleton: format → analyze (fatal-infos) → Dart tests →
-# Robolectric (generated §5.1/§7.5 suites). Emulator integration jobs land in
-# M2/M3; AGP-8.x + no-Firebase consumer jobs land with the scope exit checklist.
+# SCOPE-1 CI: format → analyze (fatal-infos) → Dart tests → Robolectric
+# (generated §5.1/§7.5 suites) → emulator matrix (live integration +
+# two-phase killed-state harness, §14.1(3)/(4)). AGP-8.x + no-Firebase
+# consumer jobs land with the scope exit checklist.
 name: ci
 
 on:
@@ -89,3 +90,96 @@ jobs:
         with:
           name: robolectric-reports
           path: android/build/reports/tests/
+
+  emulator:
+    name: emulator API ${{ matrix.api-level }} (integration + killed-state harness)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # §14.1: 26 = minSdk floor · 31 = trampoline/FGS-bg limits · 33 = tops
+        # the §10.2 expedited-work branch + POST_NOTIFICATIONS · 34 = FSI
+        # special access + FGS types · 36 = targetSdk (Robolectric can't).
+        include:
+          - api-level: 26
+            target: default
+            arch: x86
+          - api-level: 31
+            target: default
+            arch: x86_64
+          - api-level: 33
+            target: google_apis
+            arch: x86_64
+          - api-level: 34
+            target: google_apis
+            arch: x86_64
+          - api-level: 36
+            target: google_apis
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - name: enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: gradle/actions/setup-gradle@v4
+      - name: build debug apk
+        run: |
+          flutter pub get
+          cd example && flutter build apk --debug
+      - name: AVD cache
+        uses: actions/cache@v4
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ matrix.api-level }}-${{ matrix.target }}
+      - name: create AVD snapshot for caching
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.target }}
+          arch: ${{ matrix.arch }}
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "AVD snapshot created"
+      - name: live integration + two-phase killed-state harness
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.target }}
+          arch: ${{ matrix.arch }}
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            adb install -r example/build/app/outputs/flutter-apk/app-debug.apk
+            if [ "${{ matrix.api-level }}" -ge 33 ]; then adb shell pm grant com.wibechat.ringkit_example android.permission.POST_NOTIFICATIONS; fi
+            # Harness FIRST: `flutter test integration_test` uninstalls the app
+            # when it finishes (verified on-device), which would strand any
+            # adb-driven step that runs after it.
+            tools/killed_state_harness.sh
+            cd example && flutter test integration_test/ring_flow_test.dart -d "$(adb devices | awk 'NR==2{print $1}')"
+      - name: upload logcat on failure
+        if: failure()
+        run: adb logcat -d > logcat-${{ matrix.api-level }}.txt || true
+      - name: upload logcat artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-logs-${{ matrix.api-level }}
+          path: logcat-${{ matrix.api-level }}.txt

@@ -15,8 +15,21 @@ object RingKitNative {
     /**
      * Deliver a push payload. [serverSentAtMs] is FCM's RemoteMessage.getSentTime()
      * when available — preferred over rk.sentAt for the staleness guard (§5.2).
+     *
+     * [onProcessed] fires (on the writer thread) once the payload has been fully
+     * parsed AND acted on — transports with component lifetimes tie them here:
+     * a broadcast receiver holds `goAsync()` until it fires, a messaging service
+     * blocks its handler thread. Without that anchor the host process has zero
+     * active components the instant the entry point returns, and the OS may
+     * kill it BEFORE the show executes (§10.2's freezable-receiver reality —
+     * observed on One UI/API 31).
      */
-    fun deliverPayload(context: Context, data: Map<String, String>, serverSentAtMs: Long? = null) {
+    fun deliverPayload(
+        context: Context,
+        data: Map<String, String>,
+        serverSentAtMs: Long? = null,
+        onProcessed: (() -> Unit)? = null,
+    ) {
         val core = RingKitCore.get(context)
         // §8.1: short PARTIAL_WAKE_LOCK while processing the push — the ring
         // pipeline (FGS + FSI turnScreenOn) takes over from there.
@@ -47,6 +60,7 @@ object RingKitNative {
                 }
             } finally {
                 runCatching { wakeLock?.release() }
+                onProcessed?.invoke()
             }
         }
     }

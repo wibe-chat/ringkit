@@ -15,6 +15,7 @@
             <intent-filter>
                 <action android:name="com.wibechat.ringkit_example.SIMULATE_CALL" />
                 <action android:name="com.wibechat.ringkit_example.SIMULATE_CANCEL" />
+                <action android:name="com.wibechat.ringkit_example.SIMULATE_ACTION" />
             </intent-filter>
         </receiver>
     </application>
