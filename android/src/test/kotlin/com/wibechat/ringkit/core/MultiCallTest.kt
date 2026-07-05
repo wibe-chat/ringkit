@@ -198,6 +198,40 @@ class MultiCallTest {
         )
     }
 
+    // ── updateCallInfo silent re-notify (§5.1 row; M3.5) ─────────────────
+
+    @Test
+    fun update_call_info_silently_renotifies_a_posted_ringing_surface() {
+        show("owner")
+        show("upd") // waiting → direct notify() post (observable surface)
+        val before =
+            notificationManager.activeNotifications.single { it.id == notifIdOf("upd") }.notification
+        assertEquals("Alice", before.extras.getString(Notification.EXTRA_TITLE))
+
+        val result = orchestrator.updateInfoOnWriter("upd", CoreCallInfoUpdate(callerName = "Resolved Contact"))
+
+        assertEquals(TransitionOutcome.OK, result.outcome)
+        val after =
+            notificationManager.activeNotifications.single { it.id == notifIdOf("upd") }.notification
+        assertEquals("late contact resolution re-renders", "Resolved Contact", after.extras.getString(Notification.EXTRA_TITLE))
+        assertTrue("silent: onlyAlertOnce retained", after.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
+        assertEquals("no event emitted for an info update", 0, result.persistedEvents.size)
+    }
+
+    @Test
+    fun update_call_info_repaints_the_opt_out_in_call_surface() {
+        core.repository.updateConfig(core.repository.currentConfig().copy(manageOngoingCall = false))
+        show("live")
+        orchestrator.acceptProgrammaticOnWriter("live")
+
+        orchestrator.updateInfoOnWriter("live", CoreCallInfoUpdate(callerName = "Now Known"))
+
+        val posted =
+            notificationManager.activeNotifications.single { it.id == notifIdOf("live") }.notification
+        assertEquals("Now Known", posted.extras.getString(Notification.EXTRA_TITLE))
+        assertEquals("Connecting…", posted.extras.getString(Notification.EXTRA_TEXT))
+    }
+
     // ── service: promotion, re-pointing, waiting-silence backstop ────────
 
     @Test

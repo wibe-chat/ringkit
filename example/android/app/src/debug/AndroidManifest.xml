@@ -16,6 +16,8 @@
                 <action android:name="com.wibechat.ringkit_example.SIMULATE_CALL" />
                 <action android:name="com.wibechat.ringkit_example.SIMULATE_CANCEL" />
                 <action android:name="com.wibechat.ringkit_example.SIMULATE_ACTION" />
+                <action android:name="com.wibechat.ringkit_example.SIMULATE_OUTGOING" />
+                <action android:name="com.wibechat.ringkit_example.SIMULATE_UPDATE" />
             </intent-filter>
         </receiver>
     </application>

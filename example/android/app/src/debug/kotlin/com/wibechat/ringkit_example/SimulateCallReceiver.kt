@@ -50,6 +50,55 @@ class SimulateCallReceiver : BroadcastReceiver() {
                 data["rk.callId"] = intent.getStringExtra("callId") ?: return
                 passThrough(intent, data, "reason", "rk.reason")
             }
+            "com.wibechat.ringkit_example.SIMULATE_OUTGOING" -> {
+                // §5.1 startOutgoingCall (M3.5 evidence) — not a wire concept
+                // (§7.5 is incoming/cancel only), so it drives the orchestrator.
+                val core = RingKitCore.get(context)
+                val pending = goAsync()
+                core.writer.post {
+                    try {
+                        val orchestrator = IncomingCallOrchestrator(context, core)
+                        orchestrator.sweepNow()
+                        orchestrator.startOutgoingOnWriter(
+                            com.wibechat.ringkit.core.CoreOutgoingCall(
+                                id = intent.getStringExtra("callId") ?: "out-${System.currentTimeMillis()}",
+                                calleeName = intent.getStringExtra("name") ?: "Sim Callee",
+                                calleeHandle = intent.getStringExtra("handle"),
+                                type =
+                                    if (intent.getStringExtra("callType") == "video") {
+                                        com.wibechat.ringkit.core.CoreCallType.VIDEO
+                                    } else {
+                                        com.wibechat.ringkit.core.CoreCallType.AUDIO
+                                    },
+                            ),
+                        )
+                    } finally {
+                        pending.finish()
+                    }
+                }
+                return
+            }
+            "com.wibechat.ringkit_example.SIMULATE_UPDATE" -> {
+                // §5.1 updateCallInfo (M3.5 evidence — late contact resolution).
+                val callId = intent.getStringExtra("callId") ?: return
+                val core = RingKitCore.get(context)
+                val pending = goAsync()
+                core.writer.post {
+                    try {
+                        IncomingCallOrchestrator(context, core).updateInfoOnWriter(
+                            callId,
+                            com.wibechat.ringkit.core.CoreCallInfoUpdate(
+                                callerName = intent.getStringExtra("name"),
+                                callerHandle = intent.getStringExtra("handle"),
+                                avatarUrl = intent.getStringExtra("avatarUrl"),
+                            ),
+                        )
+                    } finally {
+                        pending.finish()
+                    }
+                }
+                return
+            }
             "com.wibechat.ringkit_example.SIMULATE_ACTION" -> {
                 // CI harness hook: notification-action code paths without UI
                 // taps (the PendingIntent plumbing itself is unit- and
