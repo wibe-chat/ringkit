@@ -249,6 +249,35 @@ class NotificationFactoryTest {
         assertEquals(AcceptTrampolineActivity::class.java.name, callback.component?.className)
     }
 
+    @Test
+    fun missed_call_custom_copy_and_callback_opt_out() {
+        factory().ensureChannels()
+        val custom =
+            factory().buildMissed(
+                record().info,
+                CoreCancelReason.ANSWERED_ELSEWHERE,
+                CoreMissedCallOptions(
+                    title = "You missed Alice",
+                    subtitle = "Tap to call back",
+                    showCallbackAction = false,
+                ),
+                424200,
+            )
+        assertEquals(
+            "custom title beats the reason copy",
+            "You missed Alice", custom.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals("Tap to call back", custom.extras.getString(Notification.EXTRA_TEXT))
+        assertTrue("showCallbackAction=false ⇒ no actions", custom.actions.isNullOrEmpty())
+
+        val labelled =
+            factory().buildMissed(
+                record().info, null,
+                CoreMissedCallOptions(callbackText = "Ring again"), 424200,
+            )
+        assertEquals("Ring again", labelled.actions.single().title)
+    }
+
     // ── connecting surface (M2 staging; PLAN v1.3.2) ─────────────────────
 
     @Test
