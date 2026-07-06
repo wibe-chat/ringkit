@@ -20,6 +20,8 @@
 # A consumer WITHOUT firebase_messaging has no such class on its runtime classpath;
 # since the receiver ships enabled="false" (never instantiated unless the app opts
 # into Mode 2, which requires firebase_messaging), silence R8's missing-reference
-# warning so a Firebase-free consumer's release build doesn't fail. Verified by the
-# no-Firebase consumer CI job (§14.2).
+# warning so a Firebase-free consumer's release build doesn't fail. Verified locally
+# 2026-07-07 (minimal Firebase-free consumer, R8/minify release): WITH this rule the
+# build succeeds; WITHOUT it R8 fails "Missing class ...messaging.RemoteMessage
+# (referenced from RingKitMessagingReceiver.onReceive)" — so the rule is load-bearing.
 -dontwarn com.google.firebase.messaging.**

@@ -215,15 +215,16 @@ jobs:
           name: emulator-logs-${{ matrix.api-level }}
           path: logcat-${{ matrix.api-level }}.txt
 
-  # Example release build — R8/R26 survival (WorkManager consumer-rules, §13.1 v1.3.8).
-  # NOTE (M4.2): the example now bundles firebase_messaging (Mode-1 baseline), so this
-  # job NO LONGER doubles as the "no-Firebase consumer" proof. A dedicated minimal
-  # no-Firebase consumer job is TODO per §14.2 — it guards RingKitMessagingReceiver's
-  # `compileOnly` firebase + `-dontwarn com.google.firebase.messaging.**` arrangement
-  # (the disabled c2dm receiver's RemoteMessage reference must not break a Firebase-free
-  # consumer's R8 release build).
+  # Example release build — R7/R26 resource survival (WorkManager consumer-rules, §13.1 v1.3.8).
+  # NOTE (M4.2): the example now bundles firebase_messaging (Mode-1 baseline), so it no longer
+  # doubles as the "Firebase-free consumer" proof. That arrangement (compileOnly firebase +
+  # `-dontwarn com.google.firebase.messaging.**`, so a Firebase-free consumer's R8 release build
+  # doesn't fail on RingKitMessagingReceiver's RemoteMessage reference) is VERIFIED LOCALLY
+  # (2026-07-07: minimal Firebase-free consumer, R8/minify release — negative-tested: WITHOUT the
+  # rule R8 errors "Missing class ...messaging.RemoteMessage"). No dedicated CI job for it by
+  # choice (see the CI cost trade-off) — re-add one here if the package is ever published.
   release-build:
-    name: example release build (AGP 9.x · Firebase-free · R8 survival R7/R26)
+    name: example release build (AGP 9.x · R7/R26 resource survival)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
