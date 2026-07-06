@@ -57,7 +57,7 @@ final result = await RingKit.showIncomingCall(IncomingCall(
 | Headless background handler execution (decline-while-dead → your Dart fn) | 🔜 Phase 3 (replay covers it today) |
 | Mode 2 native FCM fast path (< 300 ms killed ring) | 🔜 Phase 3 |
 | Telecom (audio routing, Bluetooth/watch answer) | 🔜 Phase 4 |
-| Fleet telemetry upload | 🔜 in progress (inert today) |
+| Fleet telemetry upload | 🔜 final pre-release scope (inert today) |
 
 Quality bar: 993 Robolectric tests (every state-machine cell is a generated test) + 15 Dart
 tests + an on-emulator integration suite + a two-phase killed-state harness, all verified on

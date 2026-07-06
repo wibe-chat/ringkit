@@ -345,7 +345,7 @@ deep-link table.
 | `setBackgroundEventHandler` headless execution | **Phase 3.** Registration API exists, but events for a dead app currently arrive via **replay on next launch** — a decline-while-dead does NOT invoke your Dart handler yet. If your server must learn about declines immediately, poll/timeout server-side for now. |
 | Mode 2 native FCM fast path (< 300 ms killed-state ring, Dart never on the critical path) | Phase 3. One-line manifest enable when it ships; use `rk.*` payload keys now to be ready. |
 | Telecom integration (`telecomIntegration: true`, `setAudioRoute`, Bluetooth/watch answer buttons) | Phase 4. `setAudioRoute` returns `wrongState` today. Keep `telecomIntegration: false`. |
-| Remote telemetry upload | In progress. The `telemetry` config field is accepted but inert — nothing leaves the device. |
+| Remote telemetry upload | Planned (final pre-release scope). The `telemetry` config field is accepted but inert — nothing leaves the device. |
 | iOS | Never (by design). |
 
 ---
