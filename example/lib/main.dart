@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:ringkit/ringkit.dart';
 
@@ -38,6 +40,78 @@ Future<void> ringkitExampleBackgroundHandler(CallEvent event) async {
   }
 }
 
+/// Shared RingKit config used by both the foreground app (`_start`) and the
+/// Mode-1 FCM background isolate — they MUST configure identically.
+RingKitConfig ringkitExampleConfig() => RingKitConfig(
+      incomingChannelName: 'Incoming calls',
+      missedChannelName: 'Missed calls',
+      ongoingChannelName: 'Ongoing call',
+      audibleChannelName: 'Incoming calls (fallback)',
+      defaultTimeoutSeconds: 45,
+      connectionTimeoutSeconds: 120,
+      maxConcurrentRinging: 3,
+      telecomIntegration: false,
+      manageOngoingCall: true,
+      foregroundBehavior: ForegroundBehavior.headsUp,
+      notificationIdBase: 424200,
+      logLevel: RingKitLogLevel.info,
+      channelSuffix: '',
+    );
+
+/// §7.2 Mode 1 — the app's OWN `firebase_messaging` background handler. Runs in a
+/// headless isolate when a push arrives while the app is backgrounded/killed. A
+/// ringkit call push (rk.* keys, §7.5) is initialized + rung here; any other
+/// message is the app's own concern. Must be top-level + `@pragma('vm:entry-point')`.
+/// NEVER await network before showIncomingCall — every awaited ms spends the
+/// FGS-from-background exemption window (§4.2).
+@pragma('vm:entry-point')
+Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  final data = message.data.map((k, v) => MapEntry(k, '$v'));
+  if (data['rk.type'] == null) return; // not a ringkit push — app handles it
+  await RingKit.initialize(ringkitExampleConfig());
+  await dispatchRingPush(data, message.sentTime);
+}
+
+/// Maps a §7.5 rk.* payload to a RingKit action — the Mode-1 Dart mirror of the
+/// native RkWireParser (parity across modes). Shared by the background isolate
+/// and the foreground `onMessage` listener.
+Future<void> dispatchRingPush(Map<String, String> data, DateTime? sentTime) async {
+  final callId = data['rk.callId'];
+  if (callId == null || callId.isEmpty) return;
+  if (data['rk.type'] == 'cancel') {
+    await RingKit.cancelCall(
+      callId,
+      reason: switch (data['rk.reason']) {
+        'answeredElsewhere' => CancelReason.answeredElsewhere,
+        'declinedElsewhere' => CancelReason.declinedElsewhere,
+        _ => CancelReason.callerCancelled,
+      },
+    );
+    return;
+  }
+  final name = data['rk.callerName'];
+  await RingKit.showIncomingCall(
+    IncomingCall(
+      id: callId,
+      callerName: (name != null && name.isNotEmpty) ? name : 'Unknown caller',
+      callerHandle: data['rk.callerHandle'],
+      avatarUrl: data['rk.avatarUrl'],
+      type: data['rk.callType'] == 'video' ? CallType.video : CallType.audio,
+      timeoutSeconds: int.tryParse(data['rk.timeoutSeconds'] ?? ''),
+      sentAtEpochMs: int.tryParse(data['rk.sentAt'] ?? '') ??
+          sentTime?.millisecondsSinceEpoch,
+      extra: const <String, String>{},
+      android: AndroidCallOptions(
+        vibrate: data['rk.vibrate'] != 'false',
+        lockScreenVisibility: NotificationVisibility.public,
+        lockScreenBehavior: data['rk.lockScreenBehavior'] == 'notificationOnly'
+            ? LockScreenBehavior.notificationOnly
+            : LockScreenBehavior.fullScreen,
+      ),
+    ),
+  );
+}
+
 // Full §15 manual test harness + integration reference (M3.7):
 // - Harness tab: every §15 button — show now/5s/15s, audio/video, avatar
 //   (+auth headers), cancel-push per reason, out-of-order cancel, second
@@ -51,8 +125,17 @@ Future<void> ringkitExampleBackgroundHandler(CallEvent event) async {
 // - Latency probe: SIMULATE_CALL stamps probeReceiptMs into extra; the
 //   CallRinging event's occurredAt minus the stamp prints as the
 //   receipt→transition latency line (§14.3 gate measurement).
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Mode 1 (§7.2): the app owns the FCM path. Init Firebase + register the
+  // background message handler that bridges rk.* pushes → RingKit while dead.
+  // Guarded so the SIMULATE_CALL harness still boots without Firebase configured.
+  try {
+    await Firebase.initializeApp();
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  } catch (e) {
+    debugPrint('[fcm] Firebase init skipped: $e');
+  }
   // §10.4: register the headless background handler (persists the 64-bit handle
   // natively) BEFORE any call can be declined-while-dead. Re-registered every
   // launch (handles are not stable across app updates).
@@ -134,23 +217,7 @@ class _HarnessHomeState extends State<HarnessHome> {
       unawaited(_refreshActive());
     }, onError: (Object e) => _log('stream error: $e'));
 
-    await RingKit.initialize(
-      RingKitConfig(
-        incomingChannelName: 'Incoming calls',
-        missedChannelName: 'Missed calls',
-        ongoingChannelName: 'Ongoing call',
-        audibleChannelName: 'Incoming calls (fallback)',
-        defaultTimeoutSeconds: 45,
-        connectionTimeoutSeconds: 120,
-        maxConcurrentRinging: 3,
-        telecomIntegration: false,
-        manageOngoingCall: true,
-        foregroundBehavior: ForegroundBehavior.headsUp,
-        notificationIdBase: 424200,
-        logLevel: RingKitLogLevel.info,
-        channelSuffix: '',
-      ),
-    );
+    await RingKit.initialize(ringkitExampleConfig());
     final launch = await RingKit.consumeLaunchAction();
     if (launch != null) {
       _log('▶ launch action: ${launch.type.name} seq=${launch.sequence}'
@@ -160,6 +227,22 @@ class _HarnessHomeState extends State<HarnessHome> {
     if (mounted) setState(() => _notificationsGranted = granted);
     _log('notifications granted: $granted');
     unawaited(_refreshActive());
+
+    // Mode 1 (§7.2): surface the FCM registration token (tools/send_call.sh
+    // <token>) and bridge foreground pushes. Guarded — the harness runs without
+    // Firebase configured too.
+    try {
+      final token = await FirebaseMessaging.instance.getToken();
+      _log('📱 FCM token: $token');
+      FirebaseMessaging.onMessage.listen((message) {
+        final data = message.data.map((k, v) => MapEntry(k, '$v'));
+        if (data['rk.type'] != null) {
+          unawaited(dispatchRingPush(data, message.sentTime));
+        }
+      });
+    } catch (e) {
+      _log('FCM unavailable: $e');
+    }
   }
 
   Future<void> _refreshActive() async {

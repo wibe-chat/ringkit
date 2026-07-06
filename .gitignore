@@ -40,3 +40,9 @@ PLAN.md
 CLAUDE.md
 SCOPE-*.md
 evidence/
+
+# Firebase — client config + server secrets (never commit; each dev generates their own)
+**/google-services.json
+**/service-account*.json
+**/*-service-account*.json
+**/*firebase-adminsdk*.json

@@ -29,6 +29,12 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # Mode 1 (§7.2) FCM baseline — EXAMPLE APP ONLY. The plugin itself stays
+  # Firebase-free (compileOnly, §13.1/D6). firebase_messaging pulls the Android
+  # firebase-messaging SDK transitively, so no native dep is declared here.
+  firebase_core: ^4.11.0
+  firebase_messaging: ^16.4.1
+
 dev_dependencies:
   integration_test:
     sdk: flutter
