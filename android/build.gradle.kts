@@ -46,6 +46,9 @@ android {
 
     defaultConfig {
         minSdk = 26
+        // §13: propagate the plugin's R8 keep rules to every consuming app's
+        // release build (androidx.work Room DB + workers are reflectively built).
+        consumerProguardFiles("consumer-rules.pro")
     }
 
     testOptions {
