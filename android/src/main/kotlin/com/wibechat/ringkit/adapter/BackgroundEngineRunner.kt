@@ -7,7 +7,6 @@ import com.wibechat.ringkit.core.EventLog
 import com.wibechat.ringkit.core.RingKitCore
 import io.flutter.FlutterInjector
 import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.embedding.engine.FlutterEngineGroup
 import io.flutter.embedding.engine.dart.DartExecutor
 import io.flutter.view.FlutterCallbackInformation
 
@@ -88,8 +87,18 @@ class BackgroundEngineRunner(
             return v
         }
 
-        private fun resolvable(handle: Long): Boolean =
-            runCatching { FlutterCallbackInformation.lookupCallbackInformation(handle) != null }.getOrDefault(false)
+        private fun resolvable(handle: Long): Boolean {
+            // The native callback lookup only resolves once FlutterLoader has
+            // loaded the callback cache from disk (device-found on SM-G781B): in
+            // a COLD host process the engine hasn't booted, the cache is empty,
+            // and the lookup would false-positive as stale — dropping every
+            // decline-while-dead to replay. So only trust the native check in a
+            // warm process; cold, defer to the dispatcher's Dart-side
+            // getCallbackFromHandle guard and proceed to boot.
+            val loader = FlutterInjector.instance().flutterLoader()
+            if (!loader.initialized()) return true
+            return runCatching { FlutterCallbackInformation.lookupCallbackInformation(handle) != null }.getOrDefault(false)
+        }
     }
 }
 
@@ -105,16 +114,13 @@ interface BackgroundEngineHost {
 
 /**
  * Production headless-engine lifecycle (§10.2). All engine ops run on the MAIN
- * thread. One headless engine per process at a time; the FlutterEngineGroup is
- * cached (VM stays warm) and the engine destroyed after [IDLE_GRACE_MS] once the
- * dispatcher signals it drained its batch.
+ * thread. One headless engine per process at a time; the engine runs the
+ * dispatcher at its persisted callback handle and is destroyed after
+ * [IDLE_GRACE_MS] once the dispatcher signals it drained its batch.
  */
 internal object FlutterEngineHost : BackgroundEngineHost {
     private const val IDLE_GRACE_MS = 5_000L
     private val main = Handler(Looper.getMainLooper())
-
-    @Volatile
-    private var group: FlutterEngineGroup? = null
 
     @Volatile
     private var engine: FlutterEngine? = null
@@ -129,10 +135,21 @@ internal object FlutterEngineHost : BackgroundEngineHost {
             val loader = FlutterInjector.instance().flutterLoader()
             loader.startInitialization(app)
             loader.ensureInitializationComplete(app, null)
+            // The persisted DISPATCHER handle resolves ringkitBackgroundDispatcher
+            // exactly — a plugin-library function a FlutterEngineGroup named-
+            // entrypoint boot can't find (device-found on SM-G781B). The callback
+            // cache is loaded by ensureInitializationComplete above, so the lookup
+            // succeeds here; a stale handle ⇒ no engine, events replay.
+            val dispatcherHandle = RingKitCore.get(app).store.readBackgroundHandles()?.first ?: return@post
+            val callback = FlutterCallbackInformation.lookupCallbackInformation(dispatcherHandle) ?: return@post
+            // Flag BEFORE constructing the engine: FlutterEngine auto-attaches
+            // plugins during construction, so onAttachedToEngine must see headless.
             BackgroundEngineRunner.markExpectingHeadless()
-            val entrypoint = DartExecutor.DartEntrypoint(loader.findAppBundlePath(), "ringkitBackgroundDispatcher")
-            val g = group ?: FlutterEngineGroup(app).also { group = it }
-            engine = g.createAndRunEngine(app, entrypoint)
+            val e = FlutterEngine(app)
+            engine = e
+            e.dartExecutor.executeDartCallback(
+                DartExecutor.DartCallback(app.assets, loader.findAppBundlePath(), callback),
+            )
         }
     }
 

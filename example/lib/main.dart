@@ -1,7 +1,42 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:ringkit/ringkit.dart';
+
+/// §10.4 background handler — a TOP-LEVEL `@pragma('vm:entry-point')` function
+/// that runs in a headless isolate when an actionable event (decline/timeout/
+/// cancel) arrives while the app is dead. It POSTs to a local sink so the
+/// killed-state harness can prove decline-while-dead reached a "server" with no
+/// app launch (README "how to test killed-state"; adb reverse tcp:8099).
+///
+/// It must not throw uncaught (an uncaught throw would skip the completion ack
+/// and force a replay); every failure is swallowed best-effort.
+@pragma('vm:entry-point')
+Future<void> ringkitExampleBackgroundHandler(CallEvent event) async {
+  try {
+    final client = HttpClient();
+    final request = await client.postUrl(
+      Uri.parse('http://localhost:8099/event'),
+    );
+    final body = utf8.encode(
+      jsonEncode(<String, Object?>{
+        'type': event.runtimeType.toString(),
+        'callId': event.call.id,
+        'sequence': event.sequence,
+        'deliveryPath': event.deliveryPath.name,
+      }),
+    );
+    request.headers.contentType = ContentType.json;
+    request.contentLength = body.length; // force Content-Length (no chunking)
+    request.add(body);
+    await request.close();
+    client.close();
+  } catch (_) {
+    // Best-effort: the sink may be absent outside the harness.
+  }
+}
 
 // Full §15 manual test harness + integration reference (M3.7):
 // - Harness tab: every §15 button — show now/5s/15s, audio/video, avatar
@@ -17,6 +52,11 @@ import 'package:ringkit/ringkit.dart';
 //   CallRinging event's occurredAt minus the stamp prints as the
 //   receipt→transition latency line (§14.3 gate measurement).
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // §10.4: register the headless background handler (persists the 64-bit handle
+  // natively) BEFORE any call can be declined-while-dead. Re-registered every
+  // launch (handles are not stable across app updates).
+  RingKit.setBackgroundEventHandler(ringkitExampleBackgroundHandler);
   runApp(const RingKitExampleApp());
 }
 
