@@ -333,6 +333,12 @@ class IncomingCallOrchestrator(
     // ── sweep (§8.10 — every native entry point routes here) ─────────────
 
     fun sweepNow(): SweepReport {
+        // Reap headless leases that expired without a completion ack (R38): the
+        // events return to the pending pool for replay; record one LEASE_EXPIRED
+        // each. Runs at every native entry point via the sweep (§10.2, §8.10).
+        repository.eventLog.reapExpiredLeases().forEach { event ->
+            ringLog.incident(RingLog.IncidentType.LEASE_EXPIRED, "Orchestrator.sweepNow", event.callId)
+        }
         val pre = repository.activeCalls().associateBy { it.callId }
         core.refreshSweepEnv()
         val report = repository.sweep(core.sweepEnv)

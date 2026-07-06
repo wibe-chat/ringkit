@@ -21,6 +21,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowSystemClock
+import java.io.File
 import java.time.Duration
 
 /**
@@ -325,6 +326,43 @@ class OrchestratorPipelineTest {
         val report = orchestrator.sweepNow()
         assertTrue(report.sweptCalls.isEmpty())
         assertNotNull(core.repository.callFor("c-1"))
+    }
+
+    @Test
+    fun sweep_reaps_expired_lease_back_to_replay_and_records_incident() {
+        // A headless decline delivery leased the event but the host died before
+        // acking (frozen process). The sweep at the next native entry point
+        // reaps the expired lease → replay recovers the event AND a
+        // LEASE_EXPIRED incident is recorded (R38, §10.2).
+        val log = core.repository.eventLog
+        val seq = log.drawSeq()
+        log.append(
+            CoreEvent(
+                seq = seq,
+                callId = "c-dead",
+                type = CoreEventType.DECLINED,
+                callInfo =
+                    CoreCallInfo("c-dead", "Alice", null, null, CoreCallType.AUDIO, CoreCallDirection.INCOMING, emptyMap()),
+                wallMs = core.time.wallMs(),
+                elapsedMs = core.time.elapsedMs(),
+                bootCount = core.time.bootCount(),
+            ),
+        )
+        log.lease(listOf(seq))
+        assertTrue("leased ⇒ hidden from replay", log.takePending().isEmpty())
+
+        ShadowSystemClock.advanceBy(Duration.ofMillis(CoreDurations.EVENT_LEASE_MS + 1_000))
+        orchestrator.sweepNow()
+
+        assertEquals("reaped lease returns the event to the pending pool", listOf(seq), log.takePending().map { it.seq })
+
+        assertTrue(core.ringLog.awaitDrained())
+        val incidentsDir = File(File(File(context.applicationContext.noBackupFilesDir, CoreStore.DIR_NAME), "logs"), "incidents")
+        val snapshotted =
+            (incidentsDir.listFiles() ?: emptyArray())
+                .filter { it.name.endsWith(".jsonl") }
+                .any { it.readText().contains("incident:LEASE_EXPIRED") }
+        assertTrue("sweep snapshotted a LEASE_EXPIRED incident", snapshotted)
     }
 
     @Test

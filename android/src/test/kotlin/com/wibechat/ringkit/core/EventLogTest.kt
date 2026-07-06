@@ -15,11 +15,11 @@ class EventLogTest {
     private val store = CoreStore.openAt(dir)
     private val log = EventLog(store, time)
 
-    private fun event(seq: Long, callId: String = "c-$seq") =
+    private fun event(seq: Long, callId: String = "c-$seq", type: CoreEventType = CoreEventType.DECLINED) =
         CoreEvent(
             seq = seq,
             callId = callId,
-            type = CoreEventType.DECLINED,
+            type = type,
             callInfo =
                 CoreCallInfo(
                     id = callId,
@@ -103,6 +103,98 @@ class EventLogTest {
         assertTrue(log.takePending().isEmpty())
         time.advanceMs(CoreDurations.EVENT_LEASE_MS + 1)
         assertTrue("consumed events never resurface", log.takePending().isEmpty())
+    }
+
+    @Test
+    fun main_engine_mid_handler_cannot_see_leased_event() {
+        // The double-delivery invariant (§10.2): while a headless run holds the
+        // lease, an engine attaching mid-handler and flushing pending events
+        // never observes the leased seq — only the un-leased one.
+        log.append(event(1L))
+        log.append(event(2L))
+        log.lease(listOf(1L))
+        assertEquals(listOf(2L), log.takePending().map { it.seq })
+    }
+
+    @Test
+    fun takeLeased_returns_active_leases_with_actionable_filter() {
+        log.append(event(1L, type = CoreEventType.DECLINED)) // actionable
+        log.append(event(2L, type = CoreEventType.ACCEPTED)) // launches the app, not headless
+        log.append(event(3L)) // DECLINED, left un-leased
+        log.lease(listOf(1L, 2L))
+
+        assertEquals("only leased, actionable events reach the handler", listOf(1L), log.takeLeased(actionableOnly = true).map { it.seq })
+        assertEquals("all active leases when unfiltered", listOf(1L, 2L), log.takeLeased(actionableOnly = false).map { it.seq })
+
+        // Expiry ends the lease → nothing is "leased" any more.
+        time.advanceMs(CoreDurations.EVENT_LEASE_MS + 1)
+        assertTrue(log.takeLeased(actionableOnly = true).isEmpty())
+    }
+
+    @Test
+    fun renewLease_extends_only_still_active_leases() {
+        log.append(event(1L))
+        log.lease(listOf(1L))
+
+        // Just before expiry: renewal pushes the deadline out a full window.
+        time.advanceMs(CoreDurations.EVENT_LEASE_MS - 1)
+        assertEquals(1, log.renewLease(listOf(1L)))
+
+        // Past the ORIGINAL deadline but inside the renewed one: still hidden.
+        time.advanceMs(2)
+        assertEquals(1, log.activeLeaseCount())
+        assertTrue(log.takePending().isEmpty())
+
+        // An already-expired lease is never resurrected (would reopen the
+        // double-delivery window the sweep just closed).
+        time.advanceMs(CoreDurations.EVENT_LEASE_MS + 1)
+        assertEquals(0, log.renewLease(listOf(1L)))
+        assertEquals(listOf(1L), log.takePending().map { it.seq })
+    }
+
+    @Test
+    fun releaseLease_returns_event_to_pending_without_consuming() {
+        log.append(event(1L))
+        log.lease(listOf(1L))
+        assertTrue(log.takePending().isEmpty())
+
+        assertEquals(1, log.releaseLease(listOf(1L)))
+        assertEquals("visible again immediately, no expiry wait", listOf(1L), log.takePending().map { it.seq })
+        assertEquals("released ≠ consumed", 1, log.unconsumedCount())
+        assertEquals(0, log.activeLeaseCount())
+        // Releasing an already-released (un-leased) event is a no-op.
+        assertEquals(0, log.releaseLease(listOf(1L)))
+    }
+
+    @Test
+    fun reapExpiredLeases_returns_expired_unconsumed_then_clears() {
+        log.append(event(1L))
+        log.append(event(2L))
+        log.lease(listOf(1L, 2L))
+        time.advanceMs(CoreDurations.EVENT_LEASE_MS + 1)
+
+        val reaped = log.reapExpiredLeases()
+        assertEquals("expiry-without-ack surfaces both for a LEASE_EXPIRED incident", listOf(1L, 2L), reaped.map { it.seq })
+        assertEquals(0, log.activeLeaseCount())
+        assertEquals("reaped events revert to plain pending (replay covers them)", listOf(1L, 2L), log.takePending().map { it.seq })
+
+        // Idempotent: a second sweep over the same expiry emits nothing.
+        assertTrue(log.reapExpiredLeases().isEmpty())
+    }
+
+    @Test
+    fun reapExpiredLeases_ignores_acked_and_still_active_leases() {
+        log.append(event(1L)) // will be acked (successful headless delivery)
+        log.append(event(2L)) // lease stays active
+        log.lease(listOf(1L, 2L))
+        log.ack(1L, listOf(1L)) // completion ack prunes seq 1
+
+        // Not yet expired: an active lease is not a failure.
+        assertTrue(log.reapExpiredLeases().isEmpty())
+
+        time.advanceMs(CoreDurations.EVENT_LEASE_MS + 1)
+        // Only the un-acked lease is reaped; the acked one left nothing behind.
+        assertEquals(listOf(2L), log.reapExpiredLeases().map { it.seq })
     }
 
     @Test
