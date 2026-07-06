@@ -55,7 +55,7 @@ class IncomingCallOrchestrator(
         val suppressReason: CoreSuppressReason? = null,
     )
 
-    fun showOnWriter(call: CoreIncomingCall): ShowOutcome {
+    fun showOnWriter(call: CoreIncomingCall, fcmDowngraded: Boolean = false): ShowOutcome {
         val result = repository.dispatch(TransitionInput.Show(call))
         // §5.2 cap evictions ride the admission result: execute the victims'
         // teardown + missed-call surfaces BEFORE the new call's own effects.
@@ -65,7 +65,7 @@ class IncomingCallOrchestrator(
         val outcome =
             when (result.outcome) {
                 TransitionOutcome.SHOWN -> {
-                    val o = executeShow(call, result)
+                    val o = executeShow(call, result, fcmDowngraded)
                     traceShow(call.id, o)
                     o
                 }
@@ -115,11 +115,26 @@ class IncomingCallOrchestrator(
      * §8.11 (evaluated in row order; `failed` short-circuits, degradations
      * accumulate). Telecom rows are Phase 4 — matrix evaluates as telecom-OFF.
      */
-    private fun executeShow(call: CoreIncomingCall, result: TransitionResult): ShowOutcome {
+    private fun executeShow(call: CoreIncomingCall, result: TransitionResult, fcmDowngraded: Boolean): ShowOutcome {
         val record = repository.callFor(call.id) ?: return ShowOutcome(result)
         val factory = factory()
         val readback = factory.ensureChannels()
         val degradations = mutableSetOf<CoreDegradeReason>()
+
+        // §8.11 fcmDowngraded (Mode-2-only, R28): FCM delivered a high-priority push
+        // at normal priority → the killed-state FGS-start exemption was silently lost.
+        // A transport observation independent of this show's own outcome; recorded as a
+        // degradation (surfaces in the [show] trace) + incident so diagnose() can report
+        // "your high-priority pushes are being de-prioritized — fix server behavior".
+        if (fcmDowngraded) {
+            degradations += CoreDegradeReason.FCM_DOWNGRADED
+            ringLog.incident(
+                RingLog.IncidentType.FCM_DOWNGRADED, "Orchestrator.executeShow", call.id,
+                setOf(CoreDegradeReason.FCM_DOWNGRADED.name),
+                mapOf("note" to "high-priority push delivered at normal priority (R28)"),
+            )
+            trace("fcm", call.id, "fcmDowngraded: delivered NORMAL, requested HIGH")
+        }
 
         // Row 1/3: notifications blocked / incoming channel blocked → failed,
         // NO surface, NO sound (invisible ringing is banned); the call stays

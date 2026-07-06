@@ -64,6 +64,11 @@ object RingKitNative {
         context: Context,
         data: Map<String, String>,
         serverSentAtMs: Long? = null,
+        // §8.11 fcmDowngraded (Mode 2 only): the FCM transport observed a high-priority
+        // push delivered at normal priority (R28). The receiver computes it from
+        // RemoteMessage priorities; carried into the show so it accumulates as a §8.11
+        // degradation + emits the FCM_DOWNGRADED incident. Mode-1/custom stacks pass false.
+        fcmDowngraded: Boolean = false,
         onProcessed: (() -> Unit)? = null,
     ) {
         val core = RingKitCore.get(context)
@@ -83,7 +88,7 @@ object RingKitNative {
                 val orchestrator = IncomingCallOrchestrator(context, core)
                 orchestrator.sweepNow() // §8.10: every native entry point
                 when (val parsed = RkWireParser.parse(data, serverSentAtMs, core.trace)) {
-                    is RkWireParser.ParseResult.Incoming -> orchestrator.showOnWriter(parsed.call)
+                    is RkWireParser.ParseResult.Incoming -> orchestrator.showOnWriter(parsed.call, fcmDowngraded)
                     is RkWireParser.ParseResult.Cancel ->
                         orchestrator.cancelOnWriter(parsed.callId, parsed.reason)
                     is RkWireParser.ParseResult.Rejected ->

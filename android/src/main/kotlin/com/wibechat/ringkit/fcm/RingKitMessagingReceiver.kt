@@ -51,6 +51,7 @@ class RingKitMessagingReceiver : BroadcastReceiver() {
             context.applicationContext,
             data,
             serverSentAtMs = message.sentTime.takeIf { it > 0L },
+            fcmDowngraded = isDowngraded(message.priority, message.originalPriority),
             onProcessed = { pending.finish() },
         )
     }
@@ -65,5 +66,17 @@ class RingKitMessagingReceiver : BroadcastReceiver() {
          */
         internal fun isRingKitMessage(data: Map<String, String>): Boolean =
             data.keys.any { it.startsWith("rk.") }
+
+        /**
+         * True iff FCM downgraded this push — the server requested HIGH priority but it
+         * was delivered at NORMAL (§8.11 `fcmDowngraded`, R28 de-prioritization), silently
+         * forfeiting the killed-state FGS-start exemption. NOTE the FCM enum is inverted
+         * (`PRIORITY_HIGH=1 < PRIORITY_NORMAL=2`), so a downgrade is a numerically *higher*
+         * delivered priority — `delivered < original` would be backwards. UNKNOWN (0) on
+         * either side is never a downgrade (ambiguous → don't false-flag).
+         */
+        internal fun isDowngraded(deliveredPriority: Int, originalPriority: Int): Boolean =
+            originalPriority == RemoteMessage.PRIORITY_HIGH &&
+                deliveredPriority == RemoteMessage.PRIORITY_NORMAL
     }
 }

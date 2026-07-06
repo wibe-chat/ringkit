@@ -138,6 +138,23 @@ class OrchestratorPipelineTest {
     }
 
     @Test
+    @org.robolectric.annotation.Config(sdk = [33])
+    fun r_fcmDowngraded_accumulates_as_degradation_on_shown() {
+        // §8.11 fcmDowngraded (Mode-2, R28): the native receiver passes fcmDowngraded=true
+        // when FCM delivered a high-priority push at NORMAL. It accumulates as a
+        // degradation on the SHOWN path (surfaces in the [show] trace + diagnose()), never
+        // a failure. SDK 33 keeps the set clean (no fsiDenied) so the assertion is exact.
+        val downgraded = orchestrator.showOnWriter(call(), fcmDowngraded = true)
+        assertEquals(TransitionOutcome.SHOWN, downgraded.result.outcome)
+        assertNull("a downgrade is a degradation, never a failure", downgraded.failReason)
+        assertTrue(CoreDegradeReason.FCM_DOWNGRADED in downgraded.degradations)
+
+        // Default (Mode 1 / non-downgraded push): never present.
+        val clean = orchestrator.showOnWriter(call(id = "c-clean"))
+        assertFalse(CoreDegradeReason.FCM_DOWNGRADED in clean.degradations)
+    }
+
+    @Test
     fun r_fgsDenied_posts_directly_with_fsi_on_audible_channel() {
         val denied =
             IncomingCallOrchestrator(context, core) { _, _ ->

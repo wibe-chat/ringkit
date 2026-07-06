@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import androidx.test.core.app.ApplicationProvider
+import com.google.firebase.messaging.RemoteMessage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -58,6 +59,52 @@ class RingKitMessagingReceiverTest {
         // startsWith("rk."), not contains — app keys like "work.rk"/"sparkId" must not
         // false-positive and get swallowed from the app's own handler.
         assertFalse(RingKitMessagingReceiver.isRingKitMessage(mapOf("work.rk" to "x", "sparkId" to "y")))
+    }
+
+    // --- §8.11 fcmDowngraded predicate (R28). The FCM enum is INVERTED:
+    //     PRIORITY_HIGH=1 < PRIORITY_NORMAL=2, so a downgrade is delivered NORMAL(2) vs
+    //     requested HIGH(1) — `delivered < original` would be backwards (self-check fix). ---
+
+    @Test
+    fun downgrade_detected_high_requested_normal_delivered() {
+        assertTrue(
+            RingKitMessagingReceiver.isDowngraded(
+                deliveredPriority = RemoteMessage.PRIORITY_NORMAL,
+                originalPriority = RemoteMessage.PRIORITY_HIGH,
+            ),
+        )
+    }
+
+    @Test
+    fun no_downgrade_when_delivered_high_as_requested() {
+        assertFalse(
+            RingKitMessagingReceiver.isDowngraded(RemoteMessage.PRIORITY_HIGH, RemoteMessage.PRIORITY_HIGH),
+        )
+    }
+
+    @Test
+    fun no_downgrade_when_both_normal() {
+        // Server asked for NORMAL, got NORMAL — not a downgrade (a killed normal push
+        // instead surfaces as fgsDenied, a different §8.11 row).
+        assertFalse(
+            RingKitMessagingReceiver.isDowngraded(RemoteMessage.PRIORITY_NORMAL, RemoteMessage.PRIORITY_NORMAL),
+        )
+    }
+
+    @Test
+    fun unknown_priority_never_false_flags() {
+        assertFalse(
+            RingKitMessagingReceiver.isDowngraded(RemoteMessage.PRIORITY_UNKNOWN, RemoteMessage.PRIORITY_HIGH),
+        )
+        assertFalse(
+            RingKitMessagingReceiver.isDowngraded(RemoteMessage.PRIORITY_NORMAL, RemoteMessage.PRIORITY_UNKNOWN),
+        )
+    }
+
+    @Test
+    fun inverted_enum_guard() {
+        // Documents WHY the predicate isn't `delivered < original`: HIGH is the smaller int.
+        assertTrue("FCM enum is inverted", RemoteMessage.PRIORITY_HIGH < RemoteMessage.PRIORITY_NORMAL)
     }
 
     // --- Manifest carve-out to the never-export invariant (R25, CLAUDE rule 8) ---
