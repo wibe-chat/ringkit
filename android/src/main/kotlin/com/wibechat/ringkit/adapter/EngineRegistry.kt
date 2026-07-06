@@ -51,15 +51,24 @@ internal object EngineRegistry {
     fun isDesignated(id: Int): Boolean = designatedId() == id
 
     /**
-     * Live-path delivery (§10.2 rung 1). Returns whether a designated engine
-     * exists to receive them (checked synchronously) — false ⇒ the caller routes
-     * to the background handler or leaves the events for replay. The actual
+     * Live-path delivery (§10.2 rung 1). Returns whether a designated engine is
+     * actively LISTENING (has a non-null sink) to receive them (checked
+     * synchronously) — false ⇒ the caller routes to the background handler or
+     * leaves the events for replay. The actual
      * `sink.success` hops to main; a designated engine vanishing in that window
      * simply leaves the events un-acked for replay (never lost).
      */
     fun emitToDesignated(records: List<CallEventRecord>): Boolean {
         if (records.isEmpty()) return false
-        if (synchronized(this) { designatedId() } == null) return false
+        // Live delivery counts ONLY if the designated engine is actually LISTENING
+        // (sink != null). A third-party background isolate that registered the plugin
+        // without subscribing — notably FlutterFire's FCM background isolate under Mode 2,
+        // which RingKit cannot flag headless (consumeExpectingHeadless only knows RingKit's
+        // own booted engine) — becomes the fallback "designated" engine with a null sink.
+        // Returning true here would post to nothing AND suppress the background handler
+        // (decline/timeout/cancel-while-dead silently lost, v1.3.10, device-found). Report
+        // NOT-consumed so the caller routes to the background handler (§10.2 rung 2).
+        if (synchronized(this) { designatedId()?.let { engines[it]?.sink } } == null) return false
         main.post {
             val sink =
                 synchronized(this) {

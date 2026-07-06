@@ -54,6 +54,32 @@ class AdapterTest {
         assertEquals("no candidates → none", null, EngineRegistry.designatedId())
     }
 
+    @Test
+    fun emitToDesignated_not_consumed_when_designated_engine_has_no_sink() {
+        // v1.3.10 regression (device-found under Mode 2): a THIRD-PARTY background
+        // isolate — FlutterFire's FCM isolate — registers the plugin non-headless but
+        // never subscribes to `events`, so its sink stays null. It becomes the fallback
+        // designated engine, but emitToDesignated MUST report NOT-consumed so the
+        // orchestrator routes the event to the background handler instead of swallowing
+        // it (otherwise decline/timeout/cancel-while-dead is silently lost).
+        EngineRegistry.register(7) // non-headless, no sink — the phantom FlutterFire isolate
+        assertEquals("phantom is the fallback designated engine", 7, EngineRegistry.designatedId())
+        assertFalse(
+            "a listener-less designated engine must not count as live-consumed",
+            EngineRegistry.emitToDesignated(listOf(sampleEventRecord())),
+        )
+    }
+
+    @Test
+    fun emitToDesignated_consumes_when_designated_engine_is_listening() {
+        EngineRegistry.register(8)
+        EngineRegistry.setSink(8, noopSink())
+        assertTrue(
+            "a listening designated engine consumes live",
+            EngineRegistry.emitToDesignated(listOf(sampleEventRecord())),
+        )
+    }
+
     // ── ack gating through the host API (§10.3) ──────────────────────────
 
     @Test
@@ -184,4 +210,22 @@ class AdapterTest {
 
     private fun <T> awaitWriter(core: RingKitCore.Instance, block: () -> T): T =
         core.writer.await(block = block)
+
+    private fun sampleEventRecord(): CallEventRecord {
+        val repo = CallRepository.open(CoreStore.openAt(TestSupport.newTempDir()), FakeTime())
+        repo.dispatch(TransitionInput.Show(TestSupport.incomingCall(id = "reg-1")))
+        val result = repo.dispatch(
+            TransitionInput.Cancel("reg-1", com.wibechat.ringkit.core.CoreCancelReason.ANSWERED_ELSEWHERE),
+        )
+        return PigeonMapper.eventRecord(result.persistedEvents.single(), CoreDeliveryPath.LIVE)
+    }
+
+    private fun noopSink(): PigeonEventSink<CallEventRecord> =
+        PigeonEventSink(
+            object : io.flutter.plugin.common.EventChannel.EventSink {
+                override fun success(event: Any?) {}
+                override fun error(errorCode: String?, errorMessage: String?, errorDetails: Any?) {}
+                override fun endOfStream() {}
+            },
+        )
 }
