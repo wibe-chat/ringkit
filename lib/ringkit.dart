@@ -4,7 +4,11 @@
 /// No iOS, no RTC/media, no push transport (§2.2).
 library;
 
-import 'dart:ui' show PluginUtilities, RootIsolateToken;
+import 'dart:ui'
+    show CallbackHandle, DartPluginRegistrant, PluginUtilities, RootIsolateToken;
+
+import 'package:flutter/widgets.dart'
+    show WidgetsFlutterBinding, visibleForTesting;
 
 import 'src/event_hub.dart';
 import 'src/events.dart';
@@ -13,18 +17,66 @@ import 'src/permissions.dart';
 
 export 'src/events.dart';
 export 'src/messages.g.dart'
-    hide RingKitHostApi, RingKitPermissionsApi, streamCallEvents;
+    hide
+        BackgroundDelivery,
+        RingKitBackgroundApi,
+        RingKitHostApi,
+        RingKitPermissionsApi,
+        streamCallEvents;
 export 'src/permissions.dart';
 
 /// A registered background handler receives actionable events (decline,
 /// timeout, cancel) in a headless isolate when no live engine exists (§10.4).
 typedef BackgroundEventHandler = Future<void> Function(CallEvent event);
 
-/// Headless-engine entrypoint (§10.2). The M3 BackgroundEngineRunner boots the
-/// engine at this function; it then looks up and invokes the app's handler.
+/// Headless-engine entrypoint (§10.2). The [BackgroundEngineRunner] boots the
+/// engine here; it pulls the leased actionable batch + the app's handler handle,
+/// invokes the handler once per event, and acks each ONLY after the handler
+/// Future completes — a throwing or never-completing handler leaves the event
+/// un-acked, so its lease expires and it replays on next launch (§10.2, §10.4).
 @pragma('vm:entry-point')
 Future<void> ringkitBackgroundDispatcher() async {
-  // Wired in M3 (SCOPE-1 covers registration; execution is the M3 runner).
+  WidgetsFlutterBinding.ensureInitialized();
+  // Attach plugins in this background isolate so the private channel resolves.
+  DartPluginRegistrant.ensureInitialized();
+  await runBackgroundDispatch(RingKitBackgroundApi());
+}
+
+/// The dispatcher's logic, isolated from the engine bootstrap for unit testing.
+/// [resolveHandler] is seamed so tests need not exercise the VM callback
+/// registry; production resolves the 64-bit handle via [PluginUtilities].
+@visibleForTesting
+Future<void> runBackgroundDispatch(
+  RingKitBackgroundApi api, {
+  BackgroundEventHandler? Function(int rawHandle) resolveHandler =
+      resolveBackgroundHandler,
+}) async {
+  final delivery = await api.fetchBackgroundDelivery();
+  final handler = resolveHandler(delivery.handlerHandle);
+  // Dart-side staleness guard (native already screens the handle, §10.4): an
+  // unresolvable handle leaves the events un-acked for replay.
+  if (handler != null) {
+    for (final record in delivery.events) {
+      try {
+        await handler(mapEventRecord(record));
+        await api.ackBackgroundEvent(record.sequence);
+      } catch (_) {
+        // Handler threw → do NOT ack → lease expiry → sweep reap → replay.
+      }
+    }
+  }
+  await api.finishBackgroundDelivery();
+}
+
+/// Resolves a persisted 64-bit handler handle to the registered top-level
+/// function, or null if it no longer resolves (app updated — handles are not
+/// stable across updates, §10.4).
+@visibleForTesting
+BackgroundEventHandler? resolveBackgroundHandler(int rawHandle) {
+  final resolved = PluginUtilities.getCallbackFromHandle(
+    CallbackHandle.fromRawHandle(rawHandle),
+  );
+  return resolved is BackgroundEventHandler ? resolved : null;
 }
 
 /// The facade (PLAN §6.1). All commands are isolate-safe and work

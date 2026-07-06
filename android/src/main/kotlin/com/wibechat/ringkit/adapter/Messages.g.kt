@@ -1141,6 +1141,54 @@ data class CallEventRecord (
 }
 
 /**
+ * §10.2 — the batch handed to the headless background isolate on boot: the
+ * app's 64-bit handler handle (resolved via getCallbackFromHandle) plus the
+ * leased actionable events (deliveryPath == background). Empty events ⇒ nothing
+ * to deliver (the runner skipped, or the batch was already reaped).
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class BackgroundDelivery (
+  val handlerHandle: Long,
+  val events: List<CallEventRecord>
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): BackgroundDelivery {
+      val handlerHandle = pigeonVar_list[0] as Long
+      val events = pigeonVar_list[1] as List<CallEventRecord>
+      return BackgroundDelivery(handlerHandle, events)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      handlerHandle,
+      events,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as BackgroundDelivery
+    return MessagesPigeonUtils.deepEquals(this.handlerHandle, other.handlerHandle) && MessagesPigeonUtils.deepEquals(this.events, other.events)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.handlerHandle)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.events)
+    return result
+  }
+  override fun toString(): String {
+    return "BackgroundDelivery(handlerHandle=$handlerHandle, events=$events)"
+  }
+}
+
+/**
  * §11.5 — telemetry module config; null config ⇒ module fully inert.
  *
  * Generated class from Pigeon that represents data sent in messages.
@@ -1749,35 +1797,40 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
       }
       161.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          RingKitTelemetryConfig.fromList(it)
+          BackgroundDelivery.fromList(it)
         }
       }
       162.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          RingKitConfig.fromList(it)
+          RingKitTelemetryConfig.fromList(it)
         }
       }
       163.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          OemInfo.fromList(it)
+          RingKitConfig.fromList(it)
         }
       }
       164.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          PermissionSnapshot.fromList(it)
+          OemInfo.fromList(it)
         }
       }
       165.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          DiagnosticsFinding.fromList(it)
+          PermissionSnapshot.fromList(it)
         }
       }
       166.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          EventLogHealth.fromList(it)
+          DiagnosticsFinding.fromList(it)
         }
       }
       167.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          EventLogHealth.fromList(it)
+        }
+      }
+      168.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
           DiagnosticsReport.fromList(it)
         }
@@ -1915,32 +1968,36 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         stream.write(160)
         writeValue(stream, value.toList())
       }
-      is RingKitTelemetryConfig -> {
+      is BackgroundDelivery -> {
         stream.write(161)
         writeValue(stream, value.toList())
       }
-      is RingKitConfig -> {
+      is RingKitTelemetryConfig -> {
         stream.write(162)
         writeValue(stream, value.toList())
       }
-      is OemInfo -> {
+      is RingKitConfig -> {
         stream.write(163)
         writeValue(stream, value.toList())
       }
-      is PermissionSnapshot -> {
+      is OemInfo -> {
         stream.write(164)
         writeValue(stream, value.toList())
       }
-      is DiagnosticsFinding -> {
+      is PermissionSnapshot -> {
         stream.write(165)
         writeValue(stream, value.toList())
       }
-      is EventLogHealth -> {
+      is DiagnosticsFinding -> {
         stream.write(166)
         writeValue(stream, value.toList())
       }
-      is DiagnosticsReport -> {
+      is EventLogHealth -> {
         stream.write(167)
+        writeValue(stream, value.toList())
+      }
+      is DiagnosticsReport -> {
+        stream.write(168)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
@@ -2607,3 +2664,95 @@ override fun onListen(p0: Any?, sink: PigeonEventSink<CallEventRecord>) {}
 override fun onCancel(p0: Any?) {}
 }
       
+/**
+ * §10.2 rung 2 — the headless dispatcher's PRIVATE channel, set up ONLY on the
+ * background (non-designated) engine the runner boots at
+ * [ringkitBackgroundDispatcher]. Every method drives the native EventLog lease
+ * protocol directly: the public [RingKitApi.ackEvents] is designated-gated and
+ * a headless isolate is never designated (§10.3), so consumption here has its
+ * own ungated ack. Not part of the public API.
+ *
+ * Generated interface from Pigeon that represents a handler of messages from Flutter.
+ */
+interface RingKitBackgroundApi {
+  /** The app's handler handle + the leased actionable batch to deliver (§10.4). */
+  fun fetchBackgroundDelivery(callback: (Result<BackgroundDelivery>) -> Unit)
+  /**
+   * Consume one event — called ONLY after its handler Future completes
+   * successfully (§10.2: consumption gated on completion, not delivery). A
+   * never-acked event's lease expires → reaped by the sweep → replay.
+   */
+  fun ackBackgroundEvent(sequence: Long, callback: (Result<Unit>) -> Unit)
+  /**
+   * The dispatcher drained its batch → the runner may tear the engine down
+   * after its idle grace (§10.2).
+   */
+  fun finishBackgroundDelivery(callback: (Result<Unit>) -> Unit)
+
+  companion object {
+    /** The codec used by RingKitBackgroundApi. */
+    val codec: MessageCodec<Any?> by lazy {
+      MessagesPigeonCodec()
+    }
+    /** Sets up an instance of `RingKitBackgroundApi` to handle messages through the `binaryMessenger`. */
+    @JvmOverloads
+    fun setUp(binaryMessenger: BinaryMessenger, api: RingKitBackgroundApi?, messageChannelSuffix: String = "") {
+      val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
+      val taskQueue = binaryMessenger.makeBackgroundTaskQueue()
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.ringkit.RingKitBackgroundApi.fetchBackgroundDelivery$separatedMessageChannelSuffix", codec, taskQueue)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.fetchBackgroundDelivery{ result: Result<BackgroundDelivery> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(MessagesPigeonUtils.wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(MessagesPigeonUtils.wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.ringkit.RingKitBackgroundApi.ackBackgroundEvent$separatedMessageChannelSuffix", codec, taskQueue)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val sequenceArg = args[0] as Long
+            api.ackBackgroundEvent(sequenceArg) { result: Result<Unit> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(MessagesPigeonUtils.wrapError(error))
+              } else {
+                reply.reply(MessagesPigeonUtils.wrapResult(null))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.ringkit.RingKitBackgroundApi.finishBackgroundDelivery$separatedMessageChannelSuffix", codec, taskQueue)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.finishBackgroundDelivery{ result: Result<Unit> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(MessagesPigeonUtils.wrapError(error))
+              } else {
+                reply.reply(MessagesPigeonUtils.wrapResult(null))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+    }
+  }
+}

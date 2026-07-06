@@ -10,9 +10,9 @@ import 'package:flutter/services.dart';
 import 'package:meta/meta.dart' show immutable, protected, visibleForTesting;
 
 Object? _extractReplyValueOrThrow(
-  List<Object?>? replyList,
-  String channelName, {
-  required bool isNullValid,
+    List<Object?>? replyList,
+    String channelName, {
+    required bool isNullValid,
 }) {
   if (replyList == null) {
     throw PlatformException(
@@ -46,9 +46,8 @@ bool _deepEquals(Object? a, Object? b) {
   }
   if (a is List && b is List) {
     return a.length == b.length &&
-        a.indexed.every(
-          ((int, dynamic) item) => _deepEquals(item.$2, b[item.$1]),
-        );
+        a.indexed
+            .every(((int, dynamic) item) => _deepEquals(item.$2, b[item.$1]));
   }
   if (a is Map && b is Map) {
     if (a.length != b.length) {
@@ -97,11 +96,23 @@ int _deepHash(Object? value) {
   return value.hashCode;
 }
 
-enum CallType { audio, video }
 
-enum CallDirection { incoming, outgoing }
+enum CallType {
+  audio,
+  video,
+}
 
-enum CallState { ringing, accepted, active, outgoing }
+enum CallDirection {
+  incoming,
+  outgoing,
+}
+
+enum CallState {
+  ringing,
+  accepted,
+  active,
+  outgoing,
+}
 
 enum CallEventType {
   ringing,
@@ -116,9 +127,17 @@ enum CallEventType {
 
 /// live = delivered while the designated engine was attached · replayed = from
 /// the persisted log on a later launch · background = headless handler (§6.2).
-enum DeliveryPath { live, replayed, background }
+enum DeliveryPath {
+  live,
+  replayed,
+  background,
+}
 
-enum EndReason { local, remote, failed }
+enum EndReason {
+  local,
+  remote,
+  failed,
+}
 
 enum CancelReason {
   callerCancelled,
@@ -134,25 +153,62 @@ enum SuppressReason {
 }
 
 /// Mapped from core-telecom endpoints (§6.3); telecom module only.
-enum AudioRoute { earpiece, speaker, bluetooth, wiredHeadset, unknown }
+enum AudioRoute {
+  earpiece,
+  speaker,
+  bluetooth,
+  wiredHeadset,
+  unknown,
+}
 
-enum NotificationImportance { none, min, low, defaultImportance, high }
+enum NotificationImportance {
+  none,
+  min,
+  low,
+  defaultImportance,
+  high,
+}
 
-enum NotificationVisibility { public, private, secret }
+enum NotificationVisibility {
+  public,
+  private,
+  secret,
+}
 
 /// fullScreen = FSI always attached (§8.2) · notificationOnly = heads-up-style
 /// CallStyle on the lock screen, validity via FGS attachment.
-enum LockScreenBehavior { fullScreen, notificationOnly }
+enum LockScreenBehavior {
+  fullScreen,
+  notificationOnly,
+}
 
-enum ForegroundBehavior { headsUp, fullScreen, silent }
+enum ForegroundBehavior {
+  headsUp,
+  fullScreen,
+  silent,
+}
 
-enum RingKitLogLevel { none, error, info, verbose }
+enum RingKitLogLevel {
+  none,
+  error,
+  info,
+  verbose,
+}
 
 /// Channel selector for openChannelSettings (§11.2); ids are versioned (§8.2).
-enum RingKitChannel { incoming, incomingAudible, ongoing, missed }
+enum RingKitChannel {
+  incoming,
+  incomingAudible,
+  ongoing,
+  missed,
+}
 
 /// Best-effort OEM settings screens (§11.2, §12).
-enum OemScreen { autostart, lockScreenDisplay, battery }
+enum OemScreen {
+  autostart,
+  lockScreenDisplay,
+  battery,
+}
 
 /// ShowCallResult outcome (§6.4). degraded carries degradations; failed carries
 /// failReason (precedence invalidParams > storeCorrupt > notificationsBlocked >
@@ -190,11 +246,19 @@ enum CallCommandResult {
   invalidParams,
 }
 
-enum DiagnosticsSeverity { info, warning, error }
+enum DiagnosticsSeverity {
+  info,
+  warning,
+  error,
+}
 
 /// Typed show outcome (§6.4). `degradations` is set-semantics carried as a list.
 class ShowCallResult {
-  ShowCallResult({required this.code, this.degradations, this.failReason});
+  ShowCallResult({
+    required this.code,
+    this.degradations,
+    this.failReason,
+  });
 
   ShowCallResultCode code;
 
@@ -203,12 +267,15 @@ class ShowCallResult {
   FailReason? failReason;
 
   List<Object?> _toList() {
-    return <Object?>[code, degradations, failReason];
+    return <Object?>[
+      code,
+      degradations,
+      failReason,
+    ];
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static ShowCallResult decode(Object result) {
     result as List<Object?>;
@@ -228,9 +295,7 @@ class ShowCallResult {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(code, other.code) &&
-        _deepEquals(degradations, other.degradations) &&
-        _deepEquals(failReason, other.failReason);
+    return _deepEquals(code, other.code) && _deepEquals(degradations, other.degradations) && _deepEquals(failReason, other.failReason);
   }
 
   @override
@@ -244,7 +309,11 @@ class ShowCallResult {
 }
 
 class AccentColors {
-  AccentColors({this.acceptArgb, this.declineArgb, this.accentArgb});
+  AccentColors({
+    this.acceptArgb,
+    this.declineArgb,
+    this.accentArgb,
+  });
 
   /// ARGB ints (Color ↔ int boundary rule).
   int? acceptArgb;
@@ -254,12 +323,15 @@ class AccentColors {
   int? accentArgb;
 
   List<Object?> _toList() {
-    return <Object?>[acceptArgb, declineArgb, accentArgb];
+    return <Object?>[
+      acceptArgb,
+      declineArgb,
+      accentArgb,
+    ];
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static AccentColors decode(Object result) {
     result as List<Object?>;
@@ -279,9 +351,7 @@ class AccentColors {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(acceptArgb, other.acceptArgb) &&
-        _deepEquals(declineArgb, other.declineArgb) &&
-        _deepEquals(accentArgb, other.accentArgb);
+    return _deepEquals(acceptArgb, other.acceptArgb) && _deepEquals(declineArgb, other.declineArgb) && _deepEquals(accentArgb, other.accentArgb);
   }
 
   @override
@@ -314,12 +384,17 @@ class MissedCallOptions {
   String? callbackText;
 
   List<Object?> _toList() {
-    return <Object?>[show, title, subtitle, showCallbackAction, callbackText];
+    return <Object?>[
+      show,
+      title,
+      subtitle,
+      showCallbackAction,
+      callbackText,
+    ];
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static MissedCallOptions decode(Object result) {
     result as List<Object?>;
@@ -341,11 +416,7 @@ class MissedCallOptions {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(show, other.show) &&
-        _deepEquals(title, other.title) &&
-        _deepEquals(subtitle, other.subtitle) &&
-        _deepEquals(showCallbackAction, other.showCallbackAction) &&
-        _deepEquals(callbackText, other.callbackText);
+    return _deepEquals(show, other.show) && _deepEquals(title, other.title) && _deepEquals(subtitle, other.subtitle) && _deepEquals(showCallbackAction, other.showCallbackAction) && _deepEquals(callbackText, other.callbackText);
   }
 
   @override
@@ -403,8 +474,7 @@ class AndroidCallOptions {
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static AndroidCallOptions decode(Object result) {
     result as List<Object?>;
@@ -429,14 +499,7 @@ class AndroidCallOptions {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(ringtone, other.ringtone) &&
-        _deepEquals(vibrate, other.vibrate) &&
-        _deepEquals(missedCall, other.missedCall) &&
-        _deepEquals(colors, other.colors) &&
-        _deepEquals(fullScreenBackground, other.fullScreenBackground) &&
-        _deepEquals(lockScreenVisibility, other.lockScreenVisibility) &&
-        _deepEquals(lockScreenBehavior, other.lockScreenBehavior) &&
-        _deepEquals(useTelecom, other.useTelecom);
+    return _deepEquals(ringtone, other.ringtone) && _deepEquals(vibrate, other.vibrate) && _deepEquals(missedCall, other.missedCall) && _deepEquals(colors, other.colors) && _deepEquals(fullScreenBackground, other.fullScreenBackground) && _deepEquals(lockScreenVisibility, other.lockScreenVisibility) && _deepEquals(lockScreenBehavior, other.lockScreenBehavior) && _deepEquals(useTelecom, other.useTelecom);
   }
 
   @override
@@ -505,8 +568,7 @@ class IncomingCall {
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static IncomingCall decode(Object result) {
     result as List<Object?>;
@@ -515,8 +577,7 @@ class IncomingCall {
       callerName: result[1]! as String,
       callerHandle: result[2] as String?,
       avatarUrl: result[3] as String?,
-      avatarHeaders: (result[4] as Map<Object?, Object?>?)
-          ?.cast<String, String>(),
+      avatarHeaders: (result[4] as Map<Object?, Object?>?)?.cast<String, String>(),
       type: result[5]! as CallType,
       timeoutSeconds: result[6] as int?,
       sentAtEpochMs: result[7] as int?,
@@ -534,16 +595,7 @@ class IncomingCall {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(id, other.id) &&
-        _deepEquals(callerName, other.callerName) &&
-        _deepEquals(callerHandle, other.callerHandle) &&
-        _deepEquals(avatarUrl, other.avatarUrl) &&
-        _deepEquals(avatarHeaders, other.avatarHeaders) &&
-        _deepEquals(type, other.type) &&
-        _deepEquals(timeoutSeconds, other.timeoutSeconds) &&
-        _deepEquals(sentAtEpochMs, other.sentAtEpochMs) &&
-        _deepEquals(extra, other.extra) &&
-        _deepEquals(android, other.android);
+    return _deepEquals(id, other.id) && _deepEquals(callerName, other.callerName) && _deepEquals(callerHandle, other.callerHandle) && _deepEquals(avatarUrl, other.avatarUrl) && _deepEquals(avatarHeaders, other.avatarHeaders) && _deepEquals(type, other.type) && _deepEquals(timeoutSeconds, other.timeoutSeconds) && _deepEquals(sentAtEpochMs, other.sentAtEpochMs) && _deepEquals(extra, other.extra) && _deepEquals(android, other.android);
   }
 
   @override
@@ -598,8 +650,7 @@ class OutgoingCall {
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static OutgoingCall decode(Object result) {
     result as List<Object?>;
@@ -608,8 +659,7 @@ class OutgoingCall {
       calleeName: result[1]! as String,
       calleeHandle: result[2] as String?,
       avatarUrl: result[3] as String?,
-      avatarHeaders: (result[4] as Map<Object?, Object?>?)
-          ?.cast<String, String>(),
+      avatarHeaders: (result[4] as Map<Object?, Object?>?)?.cast<String, String>(),
       type: result[5]! as CallType,
       extra: (result[6]! as Map<Object?, Object?>).cast<String, String>(),
       android: result[7]! as AndroidCallOptions,
@@ -625,14 +675,7 @@ class OutgoingCall {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(id, other.id) &&
-        _deepEquals(calleeName, other.calleeName) &&
-        _deepEquals(calleeHandle, other.calleeHandle) &&
-        _deepEquals(avatarUrl, other.avatarUrl) &&
-        _deepEquals(avatarHeaders, other.avatarHeaders) &&
-        _deepEquals(type, other.type) &&
-        _deepEquals(extra, other.extra) &&
-        _deepEquals(android, other.android);
+    return _deepEquals(id, other.id) && _deepEquals(calleeName, other.calleeName) && _deepEquals(calleeHandle, other.calleeHandle) && _deepEquals(avatarUrl, other.avatarUrl) && _deepEquals(avatarHeaders, other.avatarHeaders) && _deepEquals(type, other.type) && _deepEquals(extra, other.extra) && _deepEquals(android, other.android);
   }
 
   @override
@@ -672,12 +715,19 @@ class CallInfo {
   Map<String, String> extra;
 
   List<Object?> _toList() {
-    return <Object?>[id, name, handle, avatarUrl, type, direction, extra];
+    return <Object?>[
+      id,
+      name,
+      handle,
+      avatarUrl,
+      type,
+      direction,
+      extra,
+    ];
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static CallInfo decode(Object result) {
     result as List<Object?>;
@@ -701,13 +751,7 @@ class CallInfo {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(id, other.id) &&
-        _deepEquals(name, other.name) &&
-        _deepEquals(handle, other.handle) &&
-        _deepEquals(avatarUrl, other.avatarUrl) &&
-        _deepEquals(type, other.type) &&
-        _deepEquals(direction, other.direction) &&
-        _deepEquals(extra, other.extra);
+    return _deepEquals(id, other.id) && _deepEquals(name, other.name) && _deepEquals(handle, other.handle) && _deepEquals(avatarUrl, other.avatarUrl) && _deepEquals(type, other.type) && _deepEquals(direction, other.direction) && _deepEquals(extra, other.extra);
   }
 
   @override
@@ -737,12 +781,16 @@ class ActiveCall {
   CallInfo info;
 
   List<Object?> _toList() {
-    return <Object?>[id, state, shownAtEpochMs, info];
+    return <Object?>[
+      id,
+      state,
+      shownAtEpochMs,
+      info,
+    ];
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static ActiveCall decode(Object result) {
     result as List<Object?>;
@@ -763,10 +811,7 @@ class ActiveCall {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(id, other.id) &&
-        _deepEquals(state, other.state) &&
-        _deepEquals(shownAtEpochMs, other.shownAtEpochMs) &&
-        _deepEquals(info, other.info);
+    return _deepEquals(id, other.id) && _deepEquals(state, other.state) && _deepEquals(shownAtEpochMs, other.shownAtEpochMs) && _deepEquals(info, other.info);
   }
 
   @override
@@ -796,12 +841,16 @@ class CallInfoUpdate {
   Map<String, String>? avatarHeaders;
 
   List<Object?> _toList() {
-    return <Object?>[callerName, callerHandle, avatarUrl, avatarHeaders];
+    return <Object?>[
+      callerName,
+      callerHandle,
+      avatarUrl,
+      avatarHeaders,
+    ];
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static CallInfoUpdate decode(Object result) {
     result as List<Object?>;
@@ -809,8 +858,7 @@ class CallInfoUpdate {
       callerName: result[0] as String?,
       callerHandle: result[1] as String?,
       avatarUrl: result[2] as String?,
-      avatarHeaders: (result[3] as Map<Object?, Object?>?)
-          ?.cast<String, String>(),
+      avatarHeaders: (result[3] as Map<Object?, Object?>?)?.cast<String, String>(),
     );
   }
 
@@ -823,10 +871,7 @@ class CallInfoUpdate {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(callerName, other.callerName) &&
-        _deepEquals(callerHandle, other.callerHandle) &&
-        _deepEquals(avatarUrl, other.avatarUrl) &&
-        _deepEquals(avatarHeaders, other.avatarHeaders);
+    return _deepEquals(callerName, other.callerName) && _deepEquals(callerHandle, other.callerHandle) && _deepEquals(avatarUrl, other.avatarUrl) && _deepEquals(avatarHeaders, other.avatarHeaders);
   }
 
   @override
@@ -858,12 +903,16 @@ class CallLaunchAction {
   bool alreadyEnded;
 
   List<Object?> _toList() {
-    return <Object?>[type, call, sequence, alreadyEnded];
+    return <Object?>[
+      type,
+      call,
+      sequence,
+      alreadyEnded,
+    ];
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static CallLaunchAction decode(Object result) {
     result as List<Object?>;
@@ -884,10 +933,7 @@ class CallLaunchAction {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(type, other.type) &&
-        _deepEquals(call, other.call) &&
-        _deepEquals(sequence, other.sequence) &&
-        _deepEquals(alreadyEnded, other.alreadyEnded);
+    return _deepEquals(type, other.type) && _deepEquals(call, other.call) && _deepEquals(sequence, other.sequence) && _deepEquals(alreadyEnded, other.alreadyEnded);
   }
 
   @override
@@ -961,8 +1007,7 @@ class CallEventRecord {
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static CallEventRecord decode(Object result) {
     result as List<Object?>;
@@ -990,17 +1035,7 @@ class CallEventRecord {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(type, other.type) &&
-        _deepEquals(call, other.call) &&
-        _deepEquals(sequence, other.sequence) &&
-        _deepEquals(occurredAtEpochMs, other.occurredAtEpochMs) &&
-        _deepEquals(deliveryPath, other.deliveryPath) &&
-        _deepEquals(persisted, other.persisted) &&
-        _deepEquals(endReason, other.endReason) &&
-        _deepEquals(cancelReason, other.cancelReason) &&
-        _deepEquals(suppressed, other.suppressed) &&
-        _deepEquals(suppressReason, other.suppressReason) &&
-        _deepEquals(audioRoute, other.audioRoute);
+    return _deepEquals(type, other.type) && _deepEquals(call, other.call) && _deepEquals(sequence, other.sequence) && _deepEquals(occurredAtEpochMs, other.occurredAtEpochMs) && _deepEquals(deliveryPath, other.deliveryPath) && _deepEquals(persisted, other.persisted) && _deepEquals(endReason, other.endReason) && _deepEquals(cancelReason, other.cancelReason) && _deepEquals(suppressed, other.suppressed) && _deepEquals(suppressReason, other.suppressReason) && _deepEquals(audioRoute, other.audioRoute);
   }
 
   @override
@@ -1010,6 +1045,60 @@ class CallEventRecord {
   @override
   String toString() {
     return 'CallEventRecord(type: $type, call: $call, sequence: $sequence, occurredAtEpochMs: $occurredAtEpochMs, deliveryPath: $deliveryPath, persisted: $persisted, endReason: $endReason, cancelReason: $cancelReason, suppressed: $suppressed, suppressReason: $suppressReason, audioRoute: $audioRoute)';
+  }
+}
+
+/// §10.2 — the batch handed to the headless background isolate on boot: the
+/// app's 64-bit handler handle (resolved via getCallbackFromHandle) plus the
+/// leased actionable events (deliveryPath == background). Empty events ⇒ nothing
+/// to deliver (the runner skipped, or the batch was already reaped).
+class BackgroundDelivery {
+  BackgroundDelivery({
+    required this.handlerHandle,
+    required this.events,
+  });
+
+  int handlerHandle;
+
+  List<CallEventRecord> events;
+
+  List<Object?> _toList() {
+    return <Object?>[
+      handlerHandle,
+      events,
+    ];
+  }
+
+  Object encode() {
+    return _toList();  }
+
+  static BackgroundDelivery decode(Object result) {
+    result as List<Object?>;
+    return BackgroundDelivery(
+      handlerHandle: result[0]! as int,
+      events: (result[1]! as List<Object?>).cast<CallEventRecord>(),
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! BackgroundDelivery || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(handlerHandle, other.handlerHandle) && _deepEquals(events, other.events);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'BackgroundDelivery(handlerHandle: $handlerHandle, events: $events)';
   }
 }
 
@@ -1046,8 +1135,7 @@ class RingKitTelemetryConfig {
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static RingKitTelemetryConfig decode(Object result) {
     result as List<Object?>;
@@ -1069,11 +1157,7 @@ class RingKitTelemetryConfig {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(endpoint, other.endpoint) &&
-        _deepEquals(apiKey, other.apiKey) &&
-        _deepEquals(deviceLabel, other.deviceLabel) &&
-        _deepEquals(uploadLevel, other.uploadLevel) &&
-        _deepEquals(dailyUploadBudgetKb, other.dailyUploadBudgetKb);
+    return _deepEquals(endpoint, other.endpoint) && _deepEquals(apiKey, other.apiKey) && _deepEquals(deviceLabel, other.deviceLabel) && _deepEquals(uploadLevel, other.uploadLevel) && _deepEquals(dailyUploadBudgetKb, other.dailyUploadBudgetKb);
   }
 
   @override
@@ -1165,8 +1249,7 @@ class RingKitConfig {
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static RingKitConfig decode(Object result) {
     result as List<Object?>;
@@ -1199,22 +1282,7 @@ class RingKitConfig {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(incomingChannelName, other.incomingChannelName) &&
-        _deepEquals(missedChannelName, other.missedChannelName) &&
-        _deepEquals(ongoingChannelName, other.ongoingChannelName) &&
-        _deepEquals(audibleChannelName, other.audibleChannelName) &&
-        _deepEquals(defaultTimeoutSeconds, other.defaultTimeoutSeconds) &&
-        _deepEquals(connectionTimeoutSeconds, other.connectionTimeoutSeconds) &&
-        _deepEquals(maxConcurrentRinging, other.maxConcurrentRinging) &&
-        _deepEquals(telecomIntegration, other.telecomIntegration) &&
-        _deepEquals(manageOngoingCall, other.manageOngoingCall) &&
-        _deepEquals(foregroundBehavior, other.foregroundBehavior) &&
-        _deepEquals(notificationIcon, other.notificationIcon) &&
-        _deepEquals(defaultRingtone, other.defaultRingtone) &&
-        _deepEquals(notificationIdBase, other.notificationIdBase) &&
-        _deepEquals(logLevel, other.logLevel) &&
-        _deepEquals(channelSuffix, other.channelSuffix) &&
-        _deepEquals(telemetry, other.telemetry);
+    return _deepEquals(incomingChannelName, other.incomingChannelName) && _deepEquals(missedChannelName, other.missedChannelName) && _deepEquals(ongoingChannelName, other.ongoingChannelName) && _deepEquals(audibleChannelName, other.audibleChannelName) && _deepEquals(defaultTimeoutSeconds, other.defaultTimeoutSeconds) && _deepEquals(connectionTimeoutSeconds, other.connectionTimeoutSeconds) && _deepEquals(maxConcurrentRinging, other.maxConcurrentRinging) && _deepEquals(telecomIntegration, other.telecomIntegration) && _deepEquals(manageOngoingCall, other.manageOngoingCall) && _deepEquals(foregroundBehavior, other.foregroundBehavior) && _deepEquals(notificationIcon, other.notificationIcon) && _deepEquals(defaultRingtone, other.defaultRingtone) && _deepEquals(notificationIdBase, other.notificationIdBase) && _deepEquals(logLevel, other.logLevel) && _deepEquals(channelSuffix, other.channelSuffix) && _deepEquals(telemetry, other.telemetry);
   }
 
   @override
@@ -1242,12 +1310,15 @@ class OemInfo {
   List<String> knownRestrictions;
 
   List<Object?> _toList() {
-    return <Object?>[manufacturer, brand, knownRestrictions];
+    return <Object?>[
+      manufacturer,
+      brand,
+      knownRestrictions,
+    ];
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static OemInfo decode(Object result) {
     result as List<Object?>;
@@ -1267,9 +1338,7 @@ class OemInfo {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(manufacturer, other.manufacturer) &&
-        _deepEquals(brand, other.brand) &&
-        _deepEquals(knownRestrictions, other.knownRestrictions);
+    return _deepEquals(manufacturer, other.manufacturer) && _deepEquals(brand, other.brand) && _deepEquals(knownRestrictions, other.knownRestrictions);
   }
 
   @override
@@ -1329,8 +1398,7 @@ class PermissionSnapshot {
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static PermissionSnapshot decode(Object result) {
     result as List<Object?>;
@@ -1356,21 +1424,7 @@ class PermissionSnapshot {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(notifications, other.notifications) &&
-        _deepEquals(fullScreenIntent, other.fullScreenIntent) &&
-        _deepEquals(
-          incomingChannelImportance,
-          other.incomingChannelImportance,
-        ) &&
-        _deepEquals(
-          ignoringBatteryOptimizations,
-          other.ignoringBatteryOptimizations,
-        ) &&
-        _deepEquals(oem, other.oem) &&
-        _deepEquals(manageOwnCallsMerged, other.manageOwnCallsMerged) &&
-        _deepEquals(fgsMerged, other.fgsMerged) &&
-        _deepEquals(fgsPhoneCallMerged, other.fgsPhoneCallMerged) &&
-        _deepEquals(fsiPermissionMerged, other.fsiPermissionMerged);
+    return _deepEquals(notifications, other.notifications) && _deepEquals(fullScreenIntent, other.fullScreenIntent) && _deepEquals(incomingChannelImportance, other.incomingChannelImportance) && _deepEquals(ignoringBatteryOptimizations, other.ignoringBatteryOptimizations) && _deepEquals(oem, other.oem) && _deepEquals(manageOwnCallsMerged, other.manageOwnCallsMerged) && _deepEquals(fgsMerged, other.fgsMerged) && _deepEquals(fgsPhoneCallMerged, other.fgsPhoneCallMerged) && _deepEquals(fsiPermissionMerged, other.fsiPermissionMerged);
   }
 
   @override
@@ -1404,12 +1458,17 @@ class DiagnosticsFinding {
   String? deepLink;
 
   List<Object?> _toList() {
-    return <Object?>[id, severity, finding, remedy, deepLink];
+    return <Object?>[
+      id,
+      severity,
+      finding,
+      remedy,
+      deepLink,
+    ];
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static DiagnosticsFinding decode(Object result) {
     result as List<Object?>;
@@ -1431,11 +1490,7 @@ class DiagnosticsFinding {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(id, other.id) &&
-        _deepEquals(severity, other.severity) &&
-        _deepEquals(finding, other.finding) &&
-        _deepEquals(remedy, other.remedy) &&
-        _deepEquals(deepLink, other.deepLink);
+    return _deepEquals(id, other.id) && _deepEquals(severity, other.severity) && _deepEquals(finding, other.finding) && _deepEquals(remedy, other.remedy) && _deepEquals(deepLink, other.deepLink);
   }
 
   @override
@@ -1478,8 +1533,7 @@ class EventLogHealth {
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static EventLogHealth decode(Object result) {
     result as List<Object?>;
@@ -1501,11 +1555,7 @@ class EventLogHealth {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(sizeBytes, other.sizeBytes) &&
-        _deepEquals(unconsumedCount, other.unconsumedCount) &&
-        _deepEquals(droppedEvents, other.droppedEvents) &&
-        _deepEquals(quarantinedEntries, other.quarantinedEntries) &&
-        _deepEquals(activeLeases, other.activeLeases);
+    return _deepEquals(sizeBytes, other.sizeBytes) && _deepEquals(unconsumedCount, other.unconsumedCount) && _deepEquals(droppedEvents, other.droppedEvents) && _deepEquals(quarantinedEntries, other.quarantinedEntries) && _deepEquals(activeLeases, other.activeLeases);
   }
 
   @override
@@ -1553,8 +1603,7 @@ class DiagnosticsReport {
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static DiagnosticsReport decode(Object result) {
     result as List<Object?>;
@@ -1577,12 +1626,7 @@ class DiagnosticsReport {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(findings, other.findings) &&
-        _deepEquals(eventLogHealth, other.eventLogHealth) &&
-        _deepEquals(lastShowResult, other.lastShowResult) &&
-        _deepEquals(lastDeliveryPath, other.lastDeliveryPath) &&
-        _deepEquals(ringTraces, other.ringTraces) &&
-        _deepEquals(generatedAtEpochMs, other.generatedAtEpochMs);
+    return _deepEquals(findings, other.findings) && _deepEquals(eventLogHealth, other.eventLogHealth) && _deepEquals(lastShowResult, other.lastShowResult) && _deepEquals(lastDeliveryPath, other.lastDeliveryPath) && _deepEquals(ringTraces, other.ringTraces) && _deepEquals(generatedAtEpochMs, other.generatedAtEpochMs);
   }
 
   @override
@@ -1595,6 +1639,7 @@ class DiagnosticsReport {
   }
 }
 
+
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
   @override
@@ -1602,122 +1647,125 @@ class _PigeonCodec extends StandardMessageCodec {
     if (value is int) {
       buffer.putUint8(4);
       buffer.putInt64(value);
-    } else if (value is CallType) {
+    }    else if (value is CallType) {
       buffer.putUint8(129);
       writeValue(buffer, value.index);
-    } else if (value is CallDirection) {
+    }    else if (value is CallDirection) {
       buffer.putUint8(130);
       writeValue(buffer, value.index);
-    } else if (value is CallState) {
+    }    else if (value is CallState) {
       buffer.putUint8(131);
       writeValue(buffer, value.index);
-    } else if (value is CallEventType) {
+    }    else if (value is CallEventType) {
       buffer.putUint8(132);
       writeValue(buffer, value.index);
-    } else if (value is DeliveryPath) {
+    }    else if (value is DeliveryPath) {
       buffer.putUint8(133);
       writeValue(buffer, value.index);
-    } else if (value is EndReason) {
+    }    else if (value is EndReason) {
       buffer.putUint8(134);
       writeValue(buffer, value.index);
-    } else if (value is CancelReason) {
+    }    else if (value is CancelReason) {
       buffer.putUint8(135);
       writeValue(buffer, value.index);
-    } else if (value is SuppressReason) {
+    }    else if (value is SuppressReason) {
       buffer.putUint8(136);
       writeValue(buffer, value.index);
-    } else if (value is AudioRoute) {
+    }    else if (value is AudioRoute) {
       buffer.putUint8(137);
       writeValue(buffer, value.index);
-    } else if (value is NotificationImportance) {
+    }    else if (value is NotificationImportance) {
       buffer.putUint8(138);
       writeValue(buffer, value.index);
-    } else if (value is NotificationVisibility) {
+    }    else if (value is NotificationVisibility) {
       buffer.putUint8(139);
       writeValue(buffer, value.index);
-    } else if (value is LockScreenBehavior) {
+    }    else if (value is LockScreenBehavior) {
       buffer.putUint8(140);
       writeValue(buffer, value.index);
-    } else if (value is ForegroundBehavior) {
+    }    else if (value is ForegroundBehavior) {
       buffer.putUint8(141);
       writeValue(buffer, value.index);
-    } else if (value is RingKitLogLevel) {
+    }    else if (value is RingKitLogLevel) {
       buffer.putUint8(142);
       writeValue(buffer, value.index);
-    } else if (value is RingKitChannel) {
+    }    else if (value is RingKitChannel) {
       buffer.putUint8(143);
       writeValue(buffer, value.index);
-    } else if (value is OemScreen) {
+    }    else if (value is OemScreen) {
       buffer.putUint8(144);
       writeValue(buffer, value.index);
-    } else if (value is ShowCallResultCode) {
+    }    else if (value is ShowCallResultCode) {
       buffer.putUint8(145);
       writeValue(buffer, value.index);
-    } else if (value is DegradeReason) {
+    }    else if (value is DegradeReason) {
       buffer.putUint8(146);
       writeValue(buffer, value.index);
-    } else if (value is FailReason) {
+    }    else if (value is FailReason) {
       buffer.putUint8(147);
       writeValue(buffer, value.index);
-    } else if (value is CallCommandResult) {
+    }    else if (value is CallCommandResult) {
       buffer.putUint8(148);
       writeValue(buffer, value.index);
-    } else if (value is DiagnosticsSeverity) {
+    }    else if (value is DiagnosticsSeverity) {
       buffer.putUint8(149);
       writeValue(buffer, value.index);
-    } else if (value is ShowCallResult) {
+    }    else if (value is ShowCallResult) {
       buffer.putUint8(150);
       writeValue(buffer, value.encode());
-    } else if (value is AccentColors) {
+    }    else if (value is AccentColors) {
       buffer.putUint8(151);
       writeValue(buffer, value.encode());
-    } else if (value is MissedCallOptions) {
+    }    else if (value is MissedCallOptions) {
       buffer.putUint8(152);
       writeValue(buffer, value.encode());
-    } else if (value is AndroidCallOptions) {
+    }    else if (value is AndroidCallOptions) {
       buffer.putUint8(153);
       writeValue(buffer, value.encode());
-    } else if (value is IncomingCall) {
+    }    else if (value is IncomingCall) {
       buffer.putUint8(154);
       writeValue(buffer, value.encode());
-    } else if (value is OutgoingCall) {
+    }    else if (value is OutgoingCall) {
       buffer.putUint8(155);
       writeValue(buffer, value.encode());
-    } else if (value is CallInfo) {
+    }    else if (value is CallInfo) {
       buffer.putUint8(156);
       writeValue(buffer, value.encode());
-    } else if (value is ActiveCall) {
+    }    else if (value is ActiveCall) {
       buffer.putUint8(157);
       writeValue(buffer, value.encode());
-    } else if (value is CallInfoUpdate) {
+    }    else if (value is CallInfoUpdate) {
       buffer.putUint8(158);
       writeValue(buffer, value.encode());
-    } else if (value is CallLaunchAction) {
+    }    else if (value is CallLaunchAction) {
       buffer.putUint8(159);
       writeValue(buffer, value.encode());
-    } else if (value is CallEventRecord) {
+    }    else if (value is CallEventRecord) {
       buffer.putUint8(160);
       writeValue(buffer, value.encode());
-    } else if (value is RingKitTelemetryConfig) {
+    }    else if (value is BackgroundDelivery) {
       buffer.putUint8(161);
       writeValue(buffer, value.encode());
-    } else if (value is RingKitConfig) {
+    }    else if (value is RingKitTelemetryConfig) {
       buffer.putUint8(162);
       writeValue(buffer, value.encode());
-    } else if (value is OemInfo) {
+    }    else if (value is RingKitConfig) {
       buffer.putUint8(163);
       writeValue(buffer, value.encode());
-    } else if (value is PermissionSnapshot) {
+    }    else if (value is OemInfo) {
       buffer.putUint8(164);
       writeValue(buffer, value.encode());
-    } else if (value is DiagnosticsFinding) {
+    }    else if (value is PermissionSnapshot) {
       buffer.putUint8(165);
       writeValue(buffer, value.encode());
-    } else if (value is EventLogHealth) {
+    }    else if (value is DiagnosticsFinding) {
       buffer.putUint8(166);
       writeValue(buffer, value.encode());
-    } else if (value is DiagnosticsReport) {
+    }    else if (value is EventLogHealth) {
       buffer.putUint8(167);
+      writeValue(buffer, value.encode());
+    }    else if (value is DiagnosticsReport) {
+      buffer.putUint8(168);
       writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
@@ -1813,18 +1861,20 @@ class _PigeonCodec extends StandardMessageCodec {
       case 160:
         return CallEventRecord.decode(readValue(buffer)!);
       case 161:
-        return RingKitTelemetryConfig.decode(readValue(buffer)!);
+        return BackgroundDelivery.decode(readValue(buffer)!);
       case 162:
-        return RingKitConfig.decode(readValue(buffer)!);
+        return RingKitTelemetryConfig.decode(readValue(buffer)!);
       case 163:
-        return OemInfo.decode(readValue(buffer)!);
+        return RingKitConfig.decode(readValue(buffer)!);
       case 164:
-        return PermissionSnapshot.decode(readValue(buffer)!);
+        return OemInfo.decode(readValue(buffer)!);
       case 165:
-        return DiagnosticsFinding.decode(readValue(buffer)!);
+        return PermissionSnapshot.decode(readValue(buffer)!);
       case 166:
-        return EventLogHealth.decode(readValue(buffer)!);
+        return DiagnosticsFinding.decode(readValue(buffer)!);
       case 167:
+        return EventLogHealth.decode(readValue(buffer)!);
+      case 168:
         return DiagnosticsReport.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
@@ -1832,9 +1882,7 @@ class _PigeonCodec extends StandardMessageCodec {
   }
 }
 
-const StandardMethodCodec pigeonMethodCodec = StandardMethodCodec(
-  _PigeonCodec(),
-);
+const StandardMethodCodec pigeonMethodCodec = StandardMethodCodec(_PigeonCodec());
 
 /// Core commands (§6.1). Implementations dispatch to the single writer
 /// executor and reply async — never blocking the platform thread (§8.9).
@@ -1842,13 +1890,9 @@ class RingKitHostApi {
   /// Constructor for [RingKitHostApi]. The [binaryMessenger] named argument is
   /// available for dependency injection. If it is left null, the default
   /// BinaryMessenger will be used which routes to the host platform.
-  RingKitHostApi({
-    BinaryMessenger? binaryMessenger,
-    String messageChannelSuffix = '',
-  }) : pigeonVar_binaryMessenger = binaryMessenger,
-       pigeonVar_messageChannelSuffix = messageChannelSuffix.isNotEmpty
-           ? '.$messageChannelSuffix'
-           : '';
+  RingKitHostApi({BinaryMessenger? binaryMessenger, String messageChannelSuffix = ''})
+      : pigeonVar_binaryMessenger = binaryMessenger,
+        pigeonVar_messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
   final BinaryMessenger? pigeonVar_binaryMessenger;
 
   static const MessageCodec<Object?> pigeonChannelCodec = _PigeonCodec();
@@ -1857,137 +1901,121 @@ class RingKitHostApi {
 
   /// Idempotent; persists config natively (versioned, last-writer-wins).
   Future<void> initialize(RingKitConfig config) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.initialize$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.initialize$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[config],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[config]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: true,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
   }
 
   Future<ShowCallResult> showIncomingCall(IncomingCall call) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.showIncomingCall$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.showIncomingCall$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[call],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[call]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as ShowCallResult;
   }
 
   Future<CallCommandResult> acceptCall(String callId) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.acceptCall$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.acceptCall$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[callId],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[callId]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as CallCommandResult;
   }
 
   Future<CallCommandResult> declineCall(String callId) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.declineCall$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.declineCall$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[callId],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[callId]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as CallCommandResult;
   }
 
   Future<CallCommandResult> endCall(String callId, EndReason reason) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.endCall$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.endCall$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[callId, reason],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[callId, reason]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as CallCommandResult;
   }
 
   /// Remote-party cancellation with reason (pre-answer); §5.1 rules apply.
-  Future<CallCommandResult> cancelCall(
-    String callId,
-    CancelReason reason,
-  ) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.cancelCall$pigeonVar_messageChannelSuffix';
+  Future<CallCommandResult> cancelCall(String callId, CancelReason reason) async {
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.cancelCall$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[callId, reason],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[callId, reason]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as CallCommandResult;
   }
 
   Future<void> endAllCalls() async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.endAllCalls$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.endAllCalls$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -1997,103 +2025,92 @@ class RingKitHostApi {
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: true,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
   }
 
   Future<CallCommandResult> setCallConnected(String callId) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.setCallConnected$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.setCallConnected$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[callId],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[callId]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as CallCommandResult;
   }
 
   Future<ShowCallResult> startOutgoingCall(OutgoingCall call) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.startOutgoingCall$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.startOutgoingCall$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[call],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[call]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as ShowCallResult;
   }
 
-  Future<CallCommandResult> updateCallInfo(
-    String callId,
-    CallInfoUpdate update,
-  ) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.updateCallInfo$pigeonVar_messageChannelSuffix';
+  Future<CallCommandResult> updateCallInfo(String callId, CallInfoUpdate update) async {
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.updateCallInfo$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[callId, update],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[callId, update]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as CallCommandResult;
   }
 
   /// Telecom module only (§6.1); otherwise wrongState.
   Future<CallCommandResult> setAudioRoute(AudioRoute route) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.setAudioRoute$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.setAudioRoute$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[route],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[route]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as CallCommandResult;
   }
 
   Future<List<ActiveCall>> activeCalls() async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.activeCalls$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.activeCalls$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -2103,17 +2120,17 @@ class RingKitHostApi {
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return (pigeonVar_replyValue! as List<Object?>).cast<ActiveCall>();
   }
 
   /// Unconsumed, un-leased events in seq order (§10.3 step 3).
   Future<List<CallEventRecord>> takePendingEvents() async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.takePendingEvents$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.takePendingEvents$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -2123,10 +2140,11 @@ class RingKitHostApi {
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return (pigeonVar_replyValue! as List<Object?>).cast<CallEventRecord>();
   }
 
@@ -2135,29 +2153,26 @@ class RingKitHostApi {
   /// ack is never silently consumed). Acks from non-designated engines are
   /// ignored (§10.3 step 1).
   Future<void> ackEvents(int upToSeq, List<int> deliveredSequences) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.ackEvents$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.ackEvents$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[upToSeq, deliveredSequences],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[upToSeq, deliveredSequences]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: true,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
   }
 
   /// One-shot; persisted natively, never raw intent extras (§6.1, R44).
   Future<CallLaunchAction?> consumeLaunchAction() async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.consumeLaunchAction$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.consumeLaunchAction$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -2167,41 +2182,36 @@ class RingKitHostApi {
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: true,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
     return pigeonVar_replyValue as CallLaunchAction?;
   }
 
   /// Both handles stored natively as 64-bit longs (§10.4 — the incumbent's
   /// Int-cast bug is structurally impossible through Pigeon).
-  Future<void> registerBackgroundEventHandler(
-    int dispatcherHandle,
-    int handlerHandle,
-  ) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.registerBackgroundEventHandler$pigeonVar_messageChannelSuffix';
+  Future<void> registerBackgroundEventHandler(int dispatcherHandle, int handlerHandle) async {
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.registerBackgroundEventHandler$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[dispatcherHandle, handlerHandle],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[dispatcherHandle, handlerHandle]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: true,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
   }
 
   Future<DiagnosticsReport> diagnose() async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitHostApi.diagnose$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitHostApi.diagnose$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -2211,10 +2221,11 @@ class RingKitHostApi {
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as DiagnosticsReport;
   }
 }
@@ -2225,13 +2236,9 @@ class RingKitPermissionsApi {
   /// Constructor for [RingKitPermissionsApi]. The [binaryMessenger] named argument is
   /// available for dependency injection. If it is left null, the default
   /// BinaryMessenger will be used which routes to the host platform.
-  RingKitPermissionsApi({
-    BinaryMessenger? binaryMessenger,
-    String messageChannelSuffix = '',
-  }) : pigeonVar_binaryMessenger = binaryMessenger,
-       pigeonVar_messageChannelSuffix = messageChannelSuffix.isNotEmpty
-           ? '.$messageChannelSuffix'
-           : '';
+  RingKitPermissionsApi({BinaryMessenger? binaryMessenger, String messageChannelSuffix = ''})
+      : pigeonVar_binaryMessenger = binaryMessenger,
+        pigeonVar_messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
   final BinaryMessenger? pigeonVar_binaryMessenger;
 
   static const MessageCodec<Object?> pigeonChannelCodec = _PigeonCodec();
@@ -2239,8 +2246,7 @@ class RingKitPermissionsApi {
   final String pigeonVar_messageChannelSuffix;
 
   Future<PermissionSnapshot> snapshot() async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.snapshot$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.snapshot$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -2250,16 +2256,16 @@ class RingKitPermissionsApi {
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as PermissionSnapshot;
   }
 
   Future<bool> requestNotifications() async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.requestNotifications$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.requestNotifications$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -2269,16 +2275,16 @@ class RingKitPermissionsApi {
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as bool;
   }
 
   Future<bool> canUseFullScreenIntent() async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.canUseFullScreenIntent$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.canUseFullScreenIntent$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -2288,16 +2294,16 @@ class RingKitPermissionsApi {
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as bool;
   }
 
   Future<void> openFullScreenIntentSettings() async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.openFullScreenIntentSettings$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.openFullScreenIntentSettings$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -2307,35 +2313,33 @@ class RingKitPermissionsApi {
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: true,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
   }
 
   Future<void> openChannelSettings(RingKitChannel channel) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.openChannelSettings$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.openChannelSettings$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[channel],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[channel]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: true,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
   }
 
   Future<bool> isIgnoringBatteryOptimizations() async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.isIgnoringBatteryOptimizations$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.isIgnoringBatteryOptimizations$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -2345,16 +2349,16 @@ class RingKitPermissionsApi {
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as bool;
   }
 
   Future<void> openBatteryOptimizationSettings() async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.openBatteryOptimizationSettings$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.openBatteryOptimizationSettings$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -2364,16 +2368,16 @@ class RingKitPermissionsApi {
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: true,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
   }
 
   /// Requires the APP to declare REQUEST_IGNORE_BATTERY_OPTIMIZATIONS (§11.2).
   Future<bool> requestIgnoreBatteryOptimizations() async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.requestIgnoreBatteryOptimizations$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.requestIgnoreBatteryOptimizations$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -2383,16 +2387,16 @@ class RingKitPermissionsApi {
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as bool;
   }
 
   Future<OemInfo> oemInfo() async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.oemInfo$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.oemInfo$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -2402,47 +2406,126 @@ class RingKitPermissionsApi {
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as OemInfo;
   }
 
   /// Best-effort intent table (§12); false if no intent resolved.
   Future<bool> openOemSettings(OemScreen screen) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.openOemSettings$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitPermissionsApi.openOemSettings$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[screen],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[screen]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as bool;
   }
 }
 
 /// Typed native→Dart event stream (D8). Designated-engine rules and ack
 /// gating live in the facade + native EventLog (§10.3).
-Stream<CallEventRecord> streamCallEvents({String instanceName = ''}) {
+Stream<CallEventRecord> streamCallEvents( {String instanceName = ''}) {
   if (instanceName.isNotEmpty) {
     instanceName = '.$instanceName';
   }
-  final EventChannel streamCallEventsChannel = EventChannel(
-    'dev.flutter.pigeon.ringkit.RingKitEventApi.streamCallEvents$instanceName',
-    pigeonMethodCodec,
-  );
+  final EventChannel streamCallEventsChannel =
+      EventChannel('dev.flutter.pigeon.ringkit.RingKitEventApi.streamCallEvents$instanceName', pigeonMethodCodec);
   return streamCallEventsChannel.receiveBroadcastStream().map((dynamic event) {
     return event as CallEventRecord;
   });
+}
+    
+
+/// §10.2 rung 2 — the headless dispatcher's PRIVATE channel, set up ONLY on the
+/// background (non-designated) engine the runner boots at
+/// [ringkitBackgroundDispatcher]. Every method drives the native EventLog lease
+/// protocol directly: the public [RingKitApi.ackEvents] is designated-gated and
+/// a headless isolate is never designated (§10.3), so consumption here has its
+/// own ungated ack. Not part of the public API.
+class RingKitBackgroundApi {
+  /// Constructor for [RingKitBackgroundApi]. The [binaryMessenger] named argument is
+  /// available for dependency injection. If it is left null, the default
+  /// BinaryMessenger will be used which routes to the host platform.
+  RingKitBackgroundApi({BinaryMessenger? binaryMessenger, String messageChannelSuffix = ''})
+      : pigeonVar_binaryMessenger = binaryMessenger,
+        pigeonVar_messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
+  final BinaryMessenger? pigeonVar_binaryMessenger;
+
+  static const MessageCodec<Object?> pigeonChannelCodec = _PigeonCodec();
+
+  final String pigeonVar_messageChannelSuffix;
+
+  /// The app's handler handle + the leased actionable batch to deliver (§10.4).
+  Future<BackgroundDelivery> fetchBackgroundDelivery() async {
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitBackgroundApi.fetchBackgroundDelivery$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
+    return pigeonVar_replyValue! as BackgroundDelivery;
+  }
+
+  /// Consume one event — called ONLY after its handler Future completes
+  /// successfully (§10.2: consumption gated on completion, not delivery). A
+  /// never-acked event's lease expires → reaped by the sweep → replay.
+  Future<void> ackBackgroundEvent(int sequence) async {
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitBackgroundApi.ackBackgroundEvent$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[sequence]);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    _extractReplyValueOrThrow(
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
+  }
+
+  /// The dispatcher drained its batch → the runner may tear the engine down
+  /// after its idle grace (§10.2).
+  Future<void> finishBackgroundDelivery() async {
+    final pigeonVar_channelName = 'dev.flutter.pigeon.ringkit.RingKitBackgroundApi.finishBackgroundDelivery$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    _extractReplyValueOrThrow(
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
+  }
 }

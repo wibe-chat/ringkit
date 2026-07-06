@@ -334,6 +334,16 @@ class CallEventRecord {
   AudioRoute? audioRoute;
 }
 
+/// §10.2 — the batch handed to the headless background isolate on boot: the
+/// app's 64-bit handler handle (resolved via getCallbackFromHandle) plus the
+/// leased actionable events (deliveryPath == background). Empty events ⇒ nothing
+/// to deliver (the runner skipped, or the batch was already reaped).
+class BackgroundDelivery {
+  BackgroundDelivery({required this.handlerHandle, required this.events});
+  int handlerHandle;
+  List<CallEventRecord> events;
+}
+
 /// §11.5 — telemetry module config; null config ⇒ module fully inert.
 class RingKitTelemetryConfig {
   RingKitTelemetryConfig({
@@ -622,4 +632,33 @@ abstract class RingKitPermissionsApi {
 @EventChannelApi()
 abstract class RingKitEventApi {
   CallEventRecord streamCallEvents();
+}
+
+// ─────────────────────────────────────────────────────── background isolate ──
+
+/// §10.2 rung 2 — the headless dispatcher's PRIVATE channel, set up ONLY on the
+/// background (non-designated) engine the runner boots at
+/// [ringkitBackgroundDispatcher]. Every method drives the native EventLog lease
+/// protocol directly: the public [RingKitApi.ackEvents] is designated-gated and
+/// a headless isolate is never designated (§10.3), so consumption here has its
+/// own ungated ack. Not part of the public API.
+@HostApi()
+abstract class RingKitBackgroundApi {
+  /// The app's handler handle + the leased actionable batch to deliver (§10.4).
+  @TaskQueue(type: TaskQueueType.serialBackgroundThread)
+  @async
+  BackgroundDelivery fetchBackgroundDelivery();
+
+  /// Consume one event — called ONLY after its handler Future completes
+  /// successfully (§10.2: consumption gated on completion, not delivery). A
+  /// never-acked event's lease expires → reaped by the sweep → replay.
+  @TaskQueue(type: TaskQueueType.serialBackgroundThread)
+  @async
+  void ackBackgroundEvent(int sequence);
+
+  /// The dispatcher drained its batch → the runner may tear the engine down
+  /// after its idle grace (§10.2).
+  @TaskQueue(type: TaskQueueType.serialBackgroundThread)
+  @async
+  void finishBackgroundDelivery();
 }
