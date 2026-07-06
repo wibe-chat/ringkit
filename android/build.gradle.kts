@@ -76,8 +76,15 @@ dependencies {
     // has been in core since 1.5; the 1.19 promoted-notification APIs are the
     // Phase-4 Android 16 polish. Revisit with the toolchain bump.
     implementation("androidx.core:core-ktx:1.17.0")
+    // §10.2 durable killed-state delivery host on API 26–33 (expedited
+    // OneTimeWorkRequest, survives process death + reboot) + §11.5 uploader.
+    // adapter/ + telemetry/ ONLY — core/ stays zero-WorkManager (PLAN §13.1).
+    // 2.10.5: latest mature 2.10 line, compileSdk-36-safe (2.11.x deferred with
+    // the androidx.core 1.19.0 toolchain bump).
+    implementation("androidx.work:work-runtime-ktx:2.10.5")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("androidx.work:work-testing:2.10.5") // §10.2 host-selection branch tests
     testImplementation("org.robolectric:robolectric:4.15.1")
     testImplementation("androidx.test:core:1.7.0")
     testImplementation("org.jetbrains.kotlin:kotlin-test")

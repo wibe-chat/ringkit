@@ -142,7 +142,7 @@ class DiagnosticsTest {
 
     @Test
     fun live_delivery_records_the_delivery_path_breadcrumb() {
-        core.liveSink = { _, _ -> }
+        core.liveSink = { _, _ -> true }
         val orchestrator = IncomingCallOrchestrator(context, core) { _, _ -> }
         orchestrator.showOnWriter(TestSupport.incomingCall(id = "bc-3"))
         assertEquals("live", core.store.readLastDeliveryPath())

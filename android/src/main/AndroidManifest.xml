@@ -86,5 +86,15 @@
             android:stopWithTask="false"
             android:foregroundServiceType="phoneCall" />
 
+        <!-- §8.1/§10.2: API 34+ headless-delivery host. shortService needs NO
+             type permission (base FOREGROUND_SERVICE suffices). START_NOT_STICKY;
+             startForeground first (R16). Below 34 the durable expedited
+             WorkManager fallback carries delivery — this service is never
+             started there. -->
+        <service
+            android:name="com.wibechat.ringkit.services.EventDeliveryService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
+
     </application>
 </manifest>

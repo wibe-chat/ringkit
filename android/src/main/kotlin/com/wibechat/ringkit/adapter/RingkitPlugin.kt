@@ -41,7 +41,7 @@ class RingkitPlugin : FlutterPlugin, ActivityAware {
             // designated), no permissions surface (no UI in a headless isolate).
             RingKitBackgroundApi.setUp(
                 binding.binaryMessenger,
-                RingKitBackgroundApiImpl(instance, onFinish = { FlutterEngineHost.scheduleTeardown() }),
+                RingKitBackgroundApiImpl(instance, onFinish = { BackgroundDeliveryCoordinator.signalFinished() }),
             )
         } else {
             // §10.2 rung 1 bridge: the orchestrator emits EVERY transition's events

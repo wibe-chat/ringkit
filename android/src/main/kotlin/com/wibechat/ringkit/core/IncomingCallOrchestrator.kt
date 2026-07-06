@@ -26,7 +26,9 @@ import com.wibechat.ringkit.ui.IncomingCallActivity
 class IncomingCallOrchestrator(
     private val context: Context,
     private val core: RingKitCore.Instance,
-    /** Seam: Robolectric can't make startForegroundService throw (§8.11 fgsDenied tests). */
+    /** §10.2 rung 2 seam: trigger durable headless delivery (tests assert routing without a real host). */
+    private val backgroundDeliveryStarter: (Context) -> Unit = { com.wibechat.ringkit.services.BackgroundDeliveryHost.deliver(it) },
+    /** Seam: Robolectric can't make startForegroundService throw (§8.11 fgsDenied tests). Kept LAST so existing trailing-lambda call sites bind here. */
     private val serviceStarter: (Context, Intent) -> Unit = { ctx, intent -> ctx.startForegroundService(intent) },
 ) {
     private val appContext = context.applicationContext
@@ -527,10 +529,32 @@ class IncomingCallOrchestrator(
             result.evictions.flatMap { it.result.persistedEvents } +
                 result.persistedEvents + result.liveEvents
         if (events.isEmpty()) return
-        val sink = core.liveSink ?: return
-        sink(events, suppress)
-        // §11.3 breadcrumb — the last path an event took toward the app.
-        runCatching { core.store.writeLastDeliveryPath("live") }
+        val deliveredLive = core.liveSink?.invoke(events, suppress) ?: false
+        if (deliveredLive) {
+            // §11.3 breadcrumb — the last path an event took toward the app.
+            runCatching { core.store.writeLastDeliveryPath("live") }
+            return
+        }
+        // §10.2 rung 2: no live designated engine consumed them (dead app / no
+        // engine yet). Route actionable events to the headless handler if one is
+        // registered; otherwise they stay in the log for replay (rung 3).
+        routeBackground(events)
+    }
+
+    /**
+     * §10.2 rung 2: hand actionable events (decline/timeout/cancel) to the
+     * durable background host. The host's runner does the leasing + engine boot;
+     * this only decides whether to trigger it. A host/runner trigger failure is a
+     * DELIVERY_FAILURE — the events then replay (R38).
+     */
+    private fun routeBackground(events: List<CoreEvent>) {
+        if (events.none { it.type in EventLog.ACTIONABLE_TYPES }) return
+        if (core.store.readBackgroundHandles() == null) return // no handler ⇒ replay (rung 3)
+        try {
+            backgroundDeliveryStarter(appContext)
+        } catch (t: Throwable) {
+            ringLog.incident(RingLog.IncidentType.DELIVERY_FAILURE, "Orchestrator.routeBackground", null, throwable = t)
+        }
     }
 
     private fun publish(callId: String, result: TransitionResult) {

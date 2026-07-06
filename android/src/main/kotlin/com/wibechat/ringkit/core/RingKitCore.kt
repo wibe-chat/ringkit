@@ -40,11 +40,14 @@ object RingKitCore {
          * the designated engine here; the orchestrator emits EVERY transition's
          * events through it exactly once — receiver declines, service timeouts,
          * sweep kills and evictions reach a live listener like any Dart-initiated
-         * command. Null (cold native process) ⇒ events wait in the log for
-         * replay. Suppress applies only to the live CallRinging (§8.11 rows).
+         * command. **Returns whether a live designated engine received them** —
+         * false (no designated engine) OR null (cold native process) ⇒ the
+         * orchestrator falls through to the §10.2 rung-2 background handler (if
+         * registered) or leaves the events for replay. Suppress applies only to
+         * the live CallRinging (§8.11 rows).
          */
         @Volatile
-        var liveSink: ((events: List<CoreEvent>, suppress: CoreSuppressReason?) -> Unit)? = null
+        var liveSink: ((events: List<CoreEvent>, suppress: CoreSuppressReason?) -> Boolean)? = null
 
         /**
          * Sweep probes (§8.10). The notification-presence check applies only to

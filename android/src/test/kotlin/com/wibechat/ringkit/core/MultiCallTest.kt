@@ -164,7 +164,10 @@ class MultiCallTest {
     @Test
     fun live_sink_gets_native_origin_events_and_evictions() {
         val emitted = mutableListOf<CoreEvent>()
-        core.liveSink = { events, _ -> emitted.addAll(events) }
+        core.liveSink = { events, _ ->
+            emitted.addAll(events)
+            true
+        }
 
         show("c1")
         assertEquals(

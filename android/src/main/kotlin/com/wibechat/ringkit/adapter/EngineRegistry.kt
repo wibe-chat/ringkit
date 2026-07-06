@@ -50,9 +50,16 @@ internal object EngineRegistry {
 
     fun isDesignated(id: Int): Boolean = designatedId() == id
 
-    /** Live-path delivery (§10.2 rung 1); undeliverable events stay in the log. */
-    fun emitToDesignated(records: List<CallEventRecord>) {
-        if (records.isEmpty()) return
+    /**
+     * Live-path delivery (§10.2 rung 1). Returns whether a designated engine
+     * exists to receive them (checked synchronously) — false ⇒ the caller routes
+     * to the background handler or leaves the events for replay. The actual
+     * `sink.success` hops to main; a designated engine vanishing in that window
+     * simply leaves the events un-acked for replay (never lost).
+     */
+    fun emitToDesignated(records: List<CallEventRecord>): Boolean {
+        if (records.isEmpty()) return false
+        if (synchronized(this) { designatedId() } == null) return false
         main.post {
             val sink =
                 synchronized(this) {
@@ -61,6 +68,7 @@ internal object EngineRegistry {
                 }
             records.forEach { sink.success(it) }
         }
+        return true
     }
 
     @Synchronized
