@@ -45,7 +45,7 @@ final result = await RingKit.showIncomingCall(IncomingCall(
 // result tells the truth: shown / degraded({fsiDenied,…}) / failed(notificationsBlocked) / expired
 ```
 
-## Status — v0.2.x (plan Phases 0–2 complete)
+## Status — Mode 1 + Mode 2, killed-state fast paths complete
 
 | Area | State |
 |---|---|
@@ -54,12 +54,12 @@ final result = await RingKit.showIncomingCall(IncomingCall(
 | Killed-state event replay + one-shot launch action | ✅ |
 | Honest degradation reporting (`ShowCallResult` tells you exactly how it rang) | ✅ |
 | Permissions/onboarding helpers + `diagnose()` fix-it report + OEM deep links | ✅ |
-| Headless background handler execution (decline-while-dead → your Dart fn) | 🔜 Phase 3 (replay covers it today) |
-| Mode 2 native FCM fast path (< 300 ms killed ring) | 🔜 Phase 3 |
+| Headless background handler execution (decline-while-dead → your Dart fn) | ✅ device-verified |
+| Mode 2 native FCM fast path (< 300 ms killed ring) — [docs/FCM.md](docs/FCM.md) | ✅ device-verified |
 | Telecom (audio routing, Bluetooth/watch answer) | 🔜 Phase 4 |
 | Fleet telemetry upload | 🔜 final pre-release scope (inert today) |
 
-Quality bar: 993 Robolectric tests (every state-machine cell is a generated test) + 15 Dart
+Quality bar: 1026 Robolectric tests (every state-machine cell is a generated test) + 19 Dart
 tests + an on-emulator integration suite + a two-phase killed-state harness, all verified on
 physical hardware.
 

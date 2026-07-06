@@ -7,9 +7,10 @@ locked, Doze). It is **signaling UX only**: no audio/video, no push transport �
 any push) and an RTC stack (LiveKit, Agora, WebRTC, …); ringkit owns everything between "push
 arrived" and "user answered/declined".
 
-> **Status (v0.2.x):** Mode 1 (Dart-path) is complete and device-verified. See
-> [What's implemented vs. coming](#whats-implemented-vs-coming) before you design around
-> not-yet-shipped features.
+> **Status:** Mode 1 (Dart path) and **Mode 2 (native FCM fast path)** are both complete and
+> device-verified, as is killed-state background event delivery (a decline-while-dead reaches your
+> Dart handler). See [What's implemented vs. coming](#whats-implemented-vs-coming) before you design
+> around not-yet-shipped features.
 
 ---
 
@@ -169,8 +170,9 @@ void main() {
 
 Recommended payload keys: use the `rk.*` names above (`rk.type`, `rk.callId`, `rk.callerName`,
 `rk.callerHandle`, `rk.avatarUrl`, `rk.callType`, `rk.timeoutSeconds`, `rk.sentAt`, `rk.reason`,
-`rk.extra` as a JSON string). They match ringkit's native wire contract, so when the Mode 2
-native fast path ships (Phase 3), enabling it is a one-line manifest flip — no server change.
+`rk.extra` as a JSON string). They're the same keys the **Mode 2 native fast path** reads, so
+turning Mode 2 on is a one-line manifest flip with no server change. The complete `rk.*` payload
+table + server guidance lives in **[FCM.md](FCM.md)**.
 
 **Server rules that matter:**
 - Always send `rk.sentAt` (epoch ms). A push delayed past the call timeout is recorded as a
@@ -184,6 +186,15 @@ native fast path ships (Phase 3), enabling it is a one-line manifest flip — no
 push to ring on a healthy device. The FGS-start exemption lasts only ~10 s from FCM receipt —
 do **not** `await` your own network calls before `showIncomingCall`.
 
+### Mode 2 — the native fast path (recommended for FCM apps)
+
+One line in your `AndroidManifest.xml` lets ringkit ring `rk.*` pushes **natively in < 300 ms even
+when the app is killed**, with Dart never on the critical path — while your other messages and
+token refresh keep working exactly as before. The payload is identical to Mode 1, so switching is a
+client-only change (no server work). You add the one-line enable **and** one guard line to your
+handler (`if (RingKit.isRingMessage(message.data)) return;`) so a call push isn't handled twice.
+Full setup is in **[FCM.md → Mode 2](FCM.md#4-mode-2--the-native-fast-path)**.
+
 ---
 
 ## 4. The accept flow & your call screen
@@ -196,7 +207,7 @@ then launches your app and delivers `CallAccepted` + a `CallLaunchAction`.
 - `launch.alreadyEnded == true` means the user hit Accept just as the call died (cancel race) —
   show a "call ended" toast, not a call screen. No extra event arrives; the terminal event was
   already delivered.
-- **Lock-screen accept (R36):** ringkit dismisses the keyguard before launching you, but on a
+- **Lock-screen accept:** ringkit dismisses the keyguard before launching you, but on a
   secure keyguard your call screen must render over the lock or the user bounces through
   authentication. In your `MainActivity` (Kotlin):
 
@@ -333,17 +344,18 @@ screen-recording of an incoming call ready).
 
 ## 9. What's implemented vs. coming
 
-**Shipped and device-verified (v0.2.x = plan Phases 0–2):** everything above — full Mode 1
-lifecycle in all app states, multi-call, missed calls, outgoing leg, in-call service, killed-state
-replay + launch action, degradation reporting, permissions helpers, diagnostics, OEM
-deep-link table.
+**Shipped and device-verified:** everything above — full Mode 1 lifecycle in all app states,
+multi-call, missed calls, outgoing leg, in-call service, killed-state replay + launch action,
+degradation reporting, permissions helpers, diagnostics, OEM deep-link table. **Plus the
+killed-state fast paths:** the **Mode 2 native FCM receiver** (< 300 ms killed-state ring, Dart off
+the critical path — see **[FCM.md](FCM.md)**) and **headless background event delivery**
+(`setBackgroundEventHandler` runs for a dead app, so a decline-while-dead invokes your Dart handler
+immediately instead of waiting for the next launch).
 
 **Not yet — don't design around these until their phase lands:**
 
 | Feature | Status |
 |---|---|
-| `setBackgroundEventHandler` headless execution | **Phase 3.** Registration API exists, but events for a dead app currently arrive via **replay on next launch** — a decline-while-dead does NOT invoke your Dart handler yet. If your server must learn about declines immediately, poll/timeout server-side for now. |
-| Mode 2 native FCM fast path (< 300 ms killed-state ring, Dart never on the critical path) | Phase 3. One-line manifest enable when it ships; use `rk.*` payload keys now to be ready. |
 | Telecom integration (`telecomIntegration: true`, `setAudioRoute`, Bluetooth/watch answer buttons) | Phase 4. `setAudioRoute` returns `wrongState` today. Keep `telecomIntegration: false`. |
 | Remote telemetry upload | Planned (final pre-release scope). The `telemetry` config field is accepted but inert — nothing leaves the device. |
 | iOS | Never (by design). |
