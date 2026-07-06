@@ -1,13 +1,18 @@
-# SCOPE-1 CI: format → analyze (fatal-infos) → Dart tests → Robolectric
-# (generated §5.1/§7.5 suites) → emulator matrix (live integration +
-# two-phase killed-state harness, §14.1(3)/(4)). AGP-8.x + no-Firebase
-# consumer jobs land with the scope exit checklist.
+# CI: format → analyze (fatal-infos) → Dart tests → Robolectric (generated
+# §5.1/§7.5 suites) + release/R8 + AGP-8.x consumer builds run on every push/PR
+# (all cheap Linux jobs). The emulator matrix (live integration + two-phase
+# killed-state harness, §14.1(3)/(4)) is the bulk of the billed minutes, so it is
+# COST-GATED: it runs ONLY on release tags (v*) or a manual "Run workflow"
+# dispatch — see the `if:` on the emulator job. Day-to-day cross-API confidence
+# comes from the Robolectric API sweep + physical-device verification before push.
 name: ci
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 # Private repo = billed minutes: a newer push supersedes the in-flight run.
 concurrency:
@@ -98,6 +103,11 @@ jobs:
 
   emulator:
     name: emulator API ${{ matrix.api-level }} (integration + killed-state harness)
+    # Cost control (private repo = billed minutes): the 5-way emulator sweep is the
+    # bulk of CI minutes. Run it ONLY on release tags (v*) or a manual "Run workflow"
+    # dispatch — never on ordinary pushes/PRs. The cheap jobs above still run on every
+    # push; cross-API confidence day-to-day comes from Robolectric + device checks.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
