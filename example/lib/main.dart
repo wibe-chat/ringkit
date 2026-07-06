@@ -40,6 +40,15 @@ Future<void> ringkitExampleBackgroundHandler(CallEvent event) async {
   }
 }
 
+/// Mode 2 (§7.3) toggle for this example. `true` = the native
+/// `RingKitMessagingReceiver` is enabled in AndroidManifest.xml and rings `rk.*`
+/// pushes natively (< 300 ms, Dart off the critical path); the Dart handlers below
+/// then GUARD `rk.*` out (native already rang it — it co-delivers to Dart via
+/// FlutterFire's receiver). Flip to `false` for the Mode-1 baseline (Dart rings
+/// `rk.*` via `dispatchRingPush`) AND drop the receiver's enable override from the
+/// manifest. Keep the two in sync.
+const bool kMode2NativeFcm = true;
+
 /// Shared RingKit config used by both the foreground app (`_start`) and the
 /// Mode-1 FCM background isolate — they MUST configure identically.
 RingKitConfig ringkitExampleConfig() => RingKitConfig(
@@ -67,9 +76,18 @@ RingKitConfig ringkitExampleConfig() => RingKitConfig(
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   final data = message.data.map((k, v) => MapEntry(k, '$v'));
-  if (data['rk.type'] == null) return; // not a ringkit push — app handles it
-  await RingKit.initialize(ringkitExampleConfig());
-  await dispatchRingPush(data, message.sentTime);
+  if (RingKit.isRingMessage(data)) {
+    // Mode 2 (§7.3): the native c2dm RingKitMessagingReceiver already rang this
+    // rk.* push before Dart even started; it co-delivers here via FlutterFire's
+    // receiver, so guard it out — do NOT ring again. Mode 1 rings it from Dart.
+    if (kMode2NativeFcm) return;
+    await RingKit.initialize(ringkitExampleConfig());
+    await dispatchRingPush(data, message.sentTime);
+    return;
+  }
+  // Not a ringkit push — the app's own message handling belongs here (both modes).
+  // Proves coexistence (§7.3): non-rk messages still reach the app's Dart handler.
+  debugPrint('[app msg] non-rk background push → app handles it: ${data.keys.toList()}');
 }
 
 /// Maps a §7.5 rk.* payload to a RingKit action — the Mode-1 Dart mirror of the
@@ -127,8 +145,10 @@ Future<void> dispatchRingPush(Map<String, String> data, DateTime? sentTime) asyn
 //   receipt→transition latency line (§14.3 gate measurement).
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Mode 1 (§7.2): the app owns the FCM path. Init Firebase + register the
-  // background message handler that bridges rk.* pushes → RingKit while dead.
+  // FCM path (§7.2 Mode 1 / §7.3 Mode 2). Init Firebase + register the app's own
+  // background message handler. `kMode2NativeFcm` above governs whether rk.* rings
+  // via the native receiver (Mode 2) or from Dart here (Mode 1); either way the
+  // handler must be registered so the app's OWN (non-rk) messages reach Dart.
   // Guarded so the SIMULATE_CALL harness still boots without Firebase configured.
   try {
     await Firebase.initializeApp();
@@ -236,8 +256,16 @@ class _HarnessHomeState extends State<HarnessHome> {
       _log('📱 FCM token: $token');
       FirebaseMessaging.onMessage.listen((message) {
         final data = message.data.map((k, v) => MapEntry(k, '$v'));
-        if (data['rk.type'] != null) {
-          unawaited(dispatchRingPush(data, message.sentTime));
+        if (RingKit.isRingMessage(data)) {
+          // Mode 2: the native receiver rang it (foreground too) — guard out.
+          // Mode 1: ring it here from Dart.
+          if (!kMode2NativeFcm) {
+            unawaited(dispatchRingPush(data, message.sentTime));
+          }
+        } else {
+          // Coexistence proof (§7.3): a non-rk message still reaches the app's own
+          // Dart handler untouched — RingKit never intercepts it (Mode 2 or Mode 1).
+          _log('[app msg] non-rk push → app handles it: ${data.keys.toList()}');
         }
       });
     } catch (e) {

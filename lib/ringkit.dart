@@ -107,6 +107,24 @@ abstract final class RingKit {
   static Future<void> initialize(RingKitConfig config) =>
       _api.initialize(config);
 
+  /// True iff [data] is a RingKit call push (carries any `rk.*` key, §7.5) —
+  /// i.e. it should be handled by RingKit, not the app's own message logic.
+  ///
+  /// **Mode 2 guard.** With the native FCM receiver enabled (§7.3), RingKit
+  /// rings `rk.*` pushes natively; the same push is ALSO co-delivered to
+  /// `firebase_messaging`'s Dart handlers (FlutterFire's receiver is
+  /// independent and cannot be suppressed). Return early on it in your
+  /// `onBackgroundMessage`/`onMessage` handler so Mode 2 never double-rings:
+  ///
+  /// ```dart
+  /// if (RingKit.isRingMessage(message.data)) return; // native handled it
+  /// ```
+  ///
+  /// (In Mode 1 you do the opposite — dispatch these to [showIncomingCall].)
+  /// Pure and isolate-safe: no platform channel, usable in a headless isolate.
+  static bool isRingMessage(Map<String, Object?> data) =>
+      data.keys.any((key) => key.startsWith('rk.'));
+
   // ── Core commands (§6.1 — all isolate-safe, all typed results) ────────
 
   static Future<ShowCallResult> showIncomingCall(IncomingCall call) {
