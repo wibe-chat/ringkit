@@ -1,7 +1,10 @@
 <!-- Plugin-provided manifest (PLAN §8.1): nothing for the app to add in the
      default setup. Every component exported="false" — PendingIntents from our
      own app don't require exported components (the incumbent exported
-     everything = open attack surface, #651).
+     everything = open attack surface, #651) — with ONE deliberate, signature-
+     guarded exception: the Mode-2 RingKitMessagingReceiver (§7.3, v1.3.9), which
+     must be exported="true" to receive Play Services' cross-process FCM broadcast
+     and is gated by the signature-level c2dm.permission.SEND (GMS-only; R25).
 
      Explicitly NOT declared (§8.1): RECORD_AUDIO, CAMERA,
      FOREGROUND_SERVICE_MICROPHONE/CAMERA, ACCESS_NOTIFICATION_POLICY,
@@ -95,6 +98,26 @@
             android:name="com.wibechat.ringkit.services.EventDeliveryService"
             android:exported="false"
             android:foregroundServiceType="shortService" />
+
+        <!-- §7.3 (v1.3.9): Mode 2 native FCM fast path. ADDITIVE c2dm receiver —
+             runs in PARALLEL with firebase_messaging's own receiver, rings rk.*
+             natively, and NEVER registers for MESSAGING_EVENT (so firebase_messaging
+             keeps token refresh + all non-rk delivery, untouched). Ships DISABLED;
+             the app opts in with one line: android:enabled="true"
+             tools:replace="android:enabled". exported="true" is mandatory (the FCM
+             broadcast is cross-process from GMS) but gated by the signature-level
+             c2dm.permission.SEND (GMS-only) — the sole, documented carve-out to the
+             exported="false" invariant (R25). firebase-messaging is compileOnly;
+             consumers not enabling Mode 2 carry zero Firebase. -->
+        <receiver
+            android:name="com.wibechat.ringkit.fcm.RingKitMessagingReceiver"
+            android:enabled="false"
+            android:exported="true"
+            android:permission="com.google.android.c2dm.permission.SEND">
+            <intent-filter>
+                <action android:name="com.google.android.c2dm.intent.RECEIVE" />
+            </intent-filter>
+        </receiver>
 
     </application>
 </manifest>

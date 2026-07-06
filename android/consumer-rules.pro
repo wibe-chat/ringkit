@@ -14,3 +14,12 @@
 # — are instantiated by WorkManager's default WorkerFactory via their
 # (Context, WorkerParameters) constructor.
 -keep class * extends androidx.work.ListenableWorker { <init>(...); }
+
+# Mode 2 (§7.3, D6): firebase-messaging is compileOnly. The disabled c2dm
+# RingKitMessagingReceiver references com.google.firebase.messaging.RemoteMessage.
+# A consumer WITHOUT firebase_messaging has no such class on its runtime classpath;
+# since the receiver ships enabled="false" (never instantiated unless the app opts
+# into Mode 2, which requires firebase_messaging), silence R8's missing-reference
+# warning so a Firebase-free consumer's release build doesn't fail. Verified by the
+# no-Firebase consumer CI job (§14.2).
+-dontwarn com.google.firebase.messaging.**

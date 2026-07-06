@@ -205,11 +205,13 @@ jobs:
           name: emulator-logs-${{ matrix.api-level }}
           path: logcat-${{ matrix.api-level }}.txt
 
-  # Doubles as the no-Firebase consumer build until fcm/ lands (Phase 3): the
-  # example is deliberately Firebase-free, so a green release build IS the
-  # "consumer without firebase_messaging" proof. When RingKitMessagingService
-  # (compileOnly firebase + -dontwarn consumer rule) arrives, split a dedicated
-  # minimal-consumer job per §14.2.
+  # Example release build — R8/R26 survival (WorkManager consumer-rules, §13.1 v1.3.8).
+  # NOTE (M4.2): the example now bundles firebase_messaging (Mode-1 baseline), so this
+  # job NO LONGER doubles as the "no-Firebase consumer" proof. A dedicated minimal
+  # no-Firebase consumer job is TODO per §14.2 — it guards RingKitMessagingReceiver's
+  # `compileOnly` firebase + `-dontwarn com.google.firebase.messaging.**` arrangement
+  # (the disabled c2dm receiver's RemoteMessage reference must not break a Firebase-free
+  # consumer's R8 release build).
   release-build:
     name: example release build (AGP 9.x · Firebase-free · R8 survival R7/R26)
     runs-on: ubuntu-latest

@@ -85,8 +85,18 @@ dependencies {
     // 2.10.5: latest mature 2.10 line, compileSdk-36-safe (2.11.x deferred with
     // the androidx.core 1.19.0 toolchain bump).
     implementation("androidx.work:work-runtime-ktx:2.10.5")
+    // Mode 2 native FCM fast path (§7.3, D6): the additive c2dm RingKitMessagingReceiver
+    // references RemoteMessage only. compileOnly ⇒ NOT shipped — the Mode-2 app's own
+    // firebase_messaging supplies the runtime classes; non-Firebase consumers stay
+    // Firebase-free (guarded by -dontwarn in consumer-rules.pro + the no-Firebase CI
+    // job, §14.2). 25.1.0 = firebase-bom 33.16.0-aligned (PLAN §13.1).
+    compileOnly("com.google.firebase:firebase-messaging:25.1.0")
 
     testImplementation("junit:junit:4.13.2")
+    // On the test classpath so the Robolectric module can load RingKitMessagingReceiver
+    // (which references RemoteMessage); compileOnly deps are absent from tests. The
+    // predicate + manifest tests never construct RemoteMessage (Firebase-free assertions).
+    testImplementation("com.google.firebase:firebase-messaging:25.1.0")
     testImplementation("androidx.work:work-testing:2.10.5") // §10.2 host-selection branch tests
     testImplementation("org.robolectric:robolectric:4.15.1")
     testImplementation("androidx.test:core:1.7.0")
