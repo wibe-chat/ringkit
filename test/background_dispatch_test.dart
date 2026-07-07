@@ -71,28 +71,40 @@ void main() {
     expect(api.finishes, 1);
   });
 
-  test('a throwing handler leaves its event un-acked (→ replay) but continues', () async {
-    final api = _FakeBackgroundApi(_delivery([1, 2]));
+  test(
+    'a throwing handler leaves its event un-acked (→ replay) but continues',
+    () async {
+      final api = _FakeBackgroundApi(_delivery([1, 2]));
 
-    await runBackgroundDispatch(
-      api,
-      resolveHandler: (_) => (event) async {
-        if (event.sequence == 1) throw StateError('handler blew up');
-      },
-    );
+      await runBackgroundDispatch(
+        api,
+        resolveHandler: (_) => (event) async {
+          if (event.sequence == 1) throw StateError('handler blew up');
+        },
+      );
 
-    expect(api.acked, [2], reason: 'seq 1 threw → un-acked; seq 2 still delivered');
-    expect(api.finishes, 1);
-  });
+      expect(api.acked, [
+        2,
+      ], reason: 'seq 1 threw → un-acked; seq 2 still delivered');
+      expect(api.finishes, 1);
+    },
+  );
 
-  test('an unresolvable (stale) handle acks nothing and still finishes', () async {
-    final api = _FakeBackgroundApi(_delivery([1, 2]));
+  test(
+    'an unresolvable (stale) handle acks nothing and still finishes',
+    () async {
+      final api = _FakeBackgroundApi(_delivery([1, 2]));
 
-    await runBackgroundDispatch(api, resolveHandler: (_) => null);
+      await runBackgroundDispatch(api, resolveHandler: (_) => null);
 
-    expect(api.acked, isEmpty, reason: 'stale handle → events kept for replay');
-    expect(api.finishes, 1);
-  });
+      expect(
+        api.acked,
+        isEmpty,
+        reason: 'stale handle → events kept for replay',
+      );
+      expect(api.finishes, 1);
+    },
+  );
 
   test('the resolved handler receives background-path events', () async {
     final api = _FakeBackgroundApi(_delivery([7]));
@@ -100,7 +112,8 @@ void main() {
 
     await runBackgroundDispatch(
       api,
-      resolveHandler: (_) => (event) async => received.add(event),
+      resolveHandler: (_) =>
+          (event) async => received.add(event),
     );
 
     expect(received.single, isA<CallDeclined>());

@@ -5,7 +5,11 @@
 library;
 
 import 'dart:ui'
-    show CallbackHandle, DartPluginRegistrant, PluginUtilities, RootIsolateToken;
+    show
+        CallbackHandle,
+        DartPluginRegistrant,
+        PluginUtilities,
+        RootIsolateToken;
 
 import 'package:flutter/widgets.dart'
     show WidgetsFlutterBinding, visibleForTesting;
