@@ -1,0 +1,203 @@
+package com.wibechat.ringkit.core
+
+import android.app.NotificationManager
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
+
+/**
+ * §8.7 / §8.11 telecom WIRING against a fake [TelecomBridge] — a real
+ * `CallsManager` needs a live system Telecom service, so the adapter is
+ * device-verified (M5.3/M5.7) and here we prove the orchestrator contract:
+ * lazy (telecom-OFF never touches the bridge), addCall-BEFORE-post ordering,
+ * the notifications-blocked bypass (§8.11 row 2) and its fallback flip, and
+ * answer/setActive/disconnect mirroring (§5.1).
+ */
+@RunWith(RobolectricTestRunner::class)
+class TelecomWiringTest {
+
+    private lateinit var context: Context
+    private lateinit var core: RingKitCore.Instance
+
+    /** Shared ordering log: the fake bridge appends "addCall"; serviceStarter "post". */
+    private val order = mutableListOf<String>()
+    private var providerInvocations = 0
+
+    private val notificationManager: NotificationManager
+        get() = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+    @Before
+    fun setUp() {
+        context = ApplicationProvider.getApplicationContext()
+        RingKitCore.resetForTests()
+        core = RingKitCore.get(context)
+    }
+
+    @After
+    fun tearDown() {
+        RingKitCore.resetForTests()
+    }
+
+    /** Records every mirror call; addCall returns [addCallResult] + logs ordering. */
+    private inner class FakeBridge(private val addCallResult: Boolean) : TelecomBridge {
+        val answers = mutableListOf<String>()
+        val actives = mutableListOf<String>()
+        val disconnects = mutableListOf<Pair<String, TelecomDisconnectCause>>()
+        private var reg = false
+
+        override val isRegistered: Boolean get() = reg
+
+        override fun addCall(call: CoreIncomingCall, hooks: TelecomHooks): Boolean {
+            order.add("addCall")
+            reg = addCallResult
+            return addCallResult
+        }
+
+        override fun onLocalAnswer(callId: String) { answers.add(callId) }
+        override fun onLocalActive(callId: String) { actives.add(callId) }
+        override fun onLocalDisconnect(callId: String, cause: TelecomDisconnectCause) {
+            disconnects.add(callId to cause)
+        }
+    }
+
+    private fun orchestrator(bridge: TelecomBridge?) =
+        IncomingCallOrchestrator(
+            context,
+            core,
+            telecomProvider = { providerInvocations++; bridge },
+            serviceStarter = { _, _ -> order.add("post") },
+        )
+
+    private fun enableTelecom() {
+        core.repository.updateConfig(core.repository.currentConfig().copy(telecomIntegration = true))
+    }
+
+    // ── lazy: telecom OFF never classloads/touches the bridge ────────────
+
+    @Test
+    fun telecom_off_never_invokes_the_provider() {
+        // Default config: telecomIntegration = false.
+        val orch = orchestrator(FakeBridge(addCallResult = true))
+        orch.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+        orch.declineOnWriter("c-1")
+
+        assertEquals("telecom-OFF never touches the provider (no classload)", 0, providerInvocations)
+        assertFalse("no telecom addCall in the ordering log", order.contains("addCall"))
+    }
+
+    // ── ordering: addCall BEFORE the notification post (§8.7) ────────────
+
+    @Test
+    fun telecom_on_addCall_precedes_the_notification_post() {
+        enableTelecom()
+        val orch = orchestrator(FakeBridge(addCallResult = true))
+        orch.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+
+        assertEquals("addCall is registered before the surface is posted", listOf("addCall", "post"), order)
+    }
+
+    // ── §8.11 row 2: notifications-blocked + telecom-ON → bypass → shown ──
+
+    @Test
+    fun notifications_blocked_with_telecom_addCall_success_bypasses_and_reports_shown() {
+        enableTelecom()
+        shadowOf(notificationManager).setNotificationsEnabled(false)
+        val orch = orchestrator(FakeBridge(addCallResult = true))
+
+        val outcome = orch.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+
+        assertEquals("telecom exemption ⇒ shown, not failed", TransitionOutcome.SHOWN, outcome.result.outcome)
+        assertNull("no failure — the CallStyle notifications-blocked block is bypassed", outcome.failReason)
+        assertTrue("addCall-before-post ordering held through the bypass", order == listOf("addCall", "post"))
+    }
+
+    // ── fallback: addCall failure re-evaluates §8.11 as telecom-OFF ──────
+
+    @Test
+    fun notifications_blocked_with_telecom_addCall_failure_falls_back_to_failed() {
+        enableTelecom()
+        shadowOf(notificationManager).setNotificationsEnabled(false)
+        val orch = orchestrator(FakeBridge(addCallResult = false))
+
+        val outcome = orch.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+
+        assertEquals(
+            "failed addCall ⇒ re-evaluate as OFF ⇒ row 2 flips back to failed(notificationsBlocked)",
+            CoreFailReason.NOTIFICATIONS_BLOCKED,
+            outcome.failReason,
+        )
+        assertTrue("addCall was attempted", order.contains("addCall"))
+        assertFalse("invisible ringing is banned: no post on fallback-failed", order.contains("post"))
+    }
+
+    // ── mirroring (§5.1 → Telecom) ───────────────────────────────────────
+
+    @Test
+    fun decline_mirrors_a_rejected_disconnect() {
+        enableTelecom()
+        val bridge = FakeBridge(addCallResult = true)
+        val orch = orchestrator(bridge)
+        orch.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+
+        orch.declineOnWriter("c-1")
+
+        assertEquals(listOf("c-1" to TelecomDisconnectCause.REJECTED), bridge.disconnects)
+    }
+
+    @Test
+    fun accept_then_connected_mirror_answer_then_active() {
+        enableTelecom()
+        val bridge = FakeBridge(addCallResult = true)
+        val orch = orchestrator(bridge)
+        orch.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+
+        orch.acceptProgrammaticOnWriter("c-1")
+        orch.setConnectedOnWriter("c-1")
+
+        assertEquals("accept → Telecom answer", listOf("c-1"), bridge.answers)
+        assertEquals("setCallConnected → Telecom setActive", listOf("c-1"), bridge.actives)
+        assertTrue("no disconnect on the happy path", bridge.disconnects.isEmpty())
+    }
+
+    @Test
+    fun timeout_mirrors_a_missed_disconnect() {
+        enableTelecom()
+        val bridge = FakeBridge(addCallResult = true)
+        val orch = orchestrator(bridge)
+        orch.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+
+        orch.timeoutOnWriter("c-1")
+
+        assertEquals(listOf("c-1" to TelecomDisconnectCause.MISSED), bridge.disconnects)
+    }
+
+    @Test
+    fun eviction_disconnects_the_evicted_telecom_call() {
+        // §5.2 cap eviction bypasses executeEffects; without the executeEviction
+        // mirror the evicted call's addCall coroutine would leak (it suspends in
+        // core-telecom's coroutineScope until disconnect). cap 2 + 3 arrivals ⇒
+        // the oldest WAITING call (c-2) is evicted with TIMED_OUT semantics.
+        core.repository.updateConfig(
+            core.repository.currentConfig().copy(telecomIntegration = true, maxConcurrentRinging = 2),
+        )
+        val bridge = FakeBridge(addCallResult = true)
+        val orch = orchestrator(bridge)
+        orch.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+        orch.showOnWriter(TestSupport.incomingCall(id = "c-2"))
+        orch.showOnWriter(TestSupport.incomingCall(id = "c-3"))
+
+        assertTrue(
+            "the evicted waiting call disconnects its Telecom session (MISSED)",
+            bridge.disconnects.contains("c-2" to TelecomDisconnectCause.MISSED),
+        )
+    }
+}

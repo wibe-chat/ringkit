@@ -28,6 +28,14 @@ class IncomingCallOrchestrator(
     private val core: RingKitCore.Instance,
     /** §10.2 rung 2 seam: trigger durable headless delivery (tests assert routing without a real host). */
     private val backgroundDeliveryStarter: (Context) -> Unit = { com.wibechat.ringkit.services.BackgroundDeliveryHost.deliver(it) },
+    /**
+     * §8.7 seam: the flag-gated telecom module. The default lazily creates
+     * [TelecomBridge] via `TelecomAdapter.getOrCreate` — referenced ONLY inside
+     * this lambda, so a telecom-OFF path never classloads telecom/core-telecom.
+     * Returns null when core-telecom can't initialize (⇒ non-telecom fallback).
+     * Robolectric injects a fake to assert ordering/§8.11-bypass/fallback/mirroring.
+     */
+    private val telecomProvider: (Context) -> TelecomBridge? = { com.wibechat.ringkit.telecom.TelecomAdapter.getOrCreate(it) },
     /** Seam: Robolectric can't make startForegroundService throw (§8.11 fgsDenied tests). Kept LAST so existing trailing-lambda call sites bind here. */
     private val serviceStarter: (Context, Intent) -> Unit = { ctx, intent -> ctx.startForegroundService(intent) },
 ) {
@@ -45,6 +53,70 @@ class IncomingCallOrchestrator(
         )
 
     private fun avatarLoader(): AvatarLoader = core.avatarLoader
+
+    // ── telecom (§8.7 — flag-gated module) ───────────────────────────────
+
+    /**
+     * Hardware/system-initiated transitions (BT/watch/wired answer, car "end")
+     * re-enter core on the writer via the process-wide singleton — safe to
+     * capture, outlives this transient orchestrator (R30, M5.3).
+     */
+    private fun telecomHooks(): TelecomHooks =
+        TelecomHooks(
+            onHardwareAnswer = { callId ->
+                core.writer.post { IncomingCallOrchestrator(appContext, core).acceptFromActionOnWriter(callId) }
+            },
+            onHardwareDisconnect = { callId ->
+                core.writer.post {
+                    val orch = IncomingCallOrchestrator(appContext, core)
+                    if (repository.callFor(callId)?.state == CoreCallState.RINGING) {
+                        orch.declineOnWriter(callId)
+                    } else {
+                        orch.endOnWriter(callId, CoreEndReason.LOCAL)
+                    }
+                }
+            },
+            onSetActive = { callId -> trace("telecom", callId, "onSetActive (unhold)") },
+            onSetInactive = { callId -> trace("telecom", callId, "onSetInactive (hold)") },
+        )
+
+    /**
+     * §8.7 answer/setActive/disconnect mirroring: reflect a transition's new
+     * state into Telecom. Only touches the bridge when telecom is enabled for
+     * the call (a non-telecom process never classloads telecom/); no-op for a
+     * callId the bridge doesn't know. Derives the action from the winning
+     * persisted events (§5.1) + CHRONOMETER_START (setCallConnected → ACTIVE).
+     */
+    private fun mirrorTelecom(result: TransitionResult, pre: CallRecord?) {
+        val record = pre ?: return
+        val enabled = record.options.useTelecom ?: repository.currentConfig().telecomIntegration
+        if (!enabled) return
+        val bridge = telecomProvider(appContext) ?: return
+        result.persistedEvents.forEach { ev ->
+            when (ev.type) {
+                CoreEventType.ACCEPTED -> bridge.onLocalAnswer(ev.callId)
+                CoreEventType.DECLINED -> bridge.onLocalDisconnect(ev.callId, TelecomDisconnectCause.REJECTED)
+                CoreEventType.TIMED_OUT -> bridge.onLocalDisconnect(ev.callId, TelecomDisconnectCause.MISSED)
+                CoreEventType.CANCELLED -> bridge.onLocalDisconnect(ev.callId, causeForCancel(ev.cancelReason))
+                CoreEventType.ENDED -> bridge.onLocalDisconnect(ev.callId, causeForEnd(ev.endReason))
+                else -> {}
+            }
+        }
+        if (CoreEffect.CHRONOMETER_START in result.effects) bridge.onLocalActive(record.callId)
+    }
+
+    private fun causeForCancel(reason: CoreCancelReason?): TelecomDisconnectCause =
+        when (reason) {
+            CoreCancelReason.LOCAL_DISMISS -> TelecomDisconnectCause.LOCAL
+            else -> TelecomDisconnectCause.REMOTE
+        }
+
+    private fun causeForEnd(reason: CoreEndReason?): TelecomDisconnectCause =
+        when (reason) {
+            CoreEndReason.REMOTE -> TelecomDisconnectCause.REMOTE
+            CoreEndReason.FAILED -> TelecomDisconnectCause.ERROR
+            else -> TelecomDisconnectCause.LOCAL
+        }
 
     // ── show (§8.11 evaluation happens HERE) ─────────────────────────────
 
@@ -108,6 +180,14 @@ class IncomingCallOrchestrator(
         if (CoreEffect.MISSED_CALL in result.effects) {
             postMissedFor(eviction.callId, repository.tombstoneFor(eviction.callId), eviction.missedCall)
         }
+        // §8.7: eviction (§5.2) bypasses executeEffects, so an evicted telecom
+        // call would never disconnect — leaking its addCall coroutine (which is
+        // suspended in core-telecom's `coroutineScope`, bytecode-verified). Mirror
+        // the TIMED_OUT terminal here too. Config-gated to avoid classloading
+        // telecom/ in a non-telecom process; no-op for a callId the bridge doesn't know.
+        if (repository.currentConfig().telecomIntegration) {
+            telecomProvider(appContext)?.onLocalDisconnect(eviction.callId, TelecomDisconnectCause.MISSED)
+        }
         publish(eviction.callId, result)
     }
 
@@ -136,10 +216,32 @@ class IncomingCallOrchestrator(
             trace("fcm", call.id, "fcmDowngraded: delivered NORMAL, requested HIGH")
         }
 
+        // §8.7: telecom addCall BEFORE any notification post — that ordering IS
+        // the notifications-blocked bypass (§8.11 row 2): NMS exempts CallStyle
+        // only while Telecom already reports the app in a call. Lazy registration
+        // happens inside the bridge; ANY failure ⇒ telecom-OFF and the matrix is
+        // evaluated as OFF (which can flip row 2 back to failed). Never blocks ringing.
+        val config = repository.currentConfig()
+        val telecomEnabled = record.options.useTelecom ?: config.telecomIntegration
+        val telecomActive =
+            telecomEnabled && (telecomProvider(appContext)?.addCall(call, telecomHooks()) ?: false)
+        if (telecomEnabled) {
+            trace(
+                "telecom", call.id,
+                if (telecomActive) {
+                    "addCall ok — CallStyle notifications-blocked exemption active"
+                } else {
+                    "addCall failed/unavailable — §8.11 re-evaluated as telecom-OFF"
+                },
+            )
+        }
+
         // Row 1/3: notifications blocked / incoming channel blocked → failed,
         // NO surface, NO sound (invisible ringing is banned); the call stays
         // persisted with its sweep-enforced deadline (§5.2 failed-shows rule).
-        if (!readback.notificationsEnabled) {
+        // §8.11 row 2: telecom-ON exempts the app-level notifications-disabled
+        // block (NOT the channel IMPORTANCE_NONE gate below — no such row).
+        if (!readback.notificationsEnabled && !telecomActive) {
             ringLog.incident(RingLog.IncidentType.SHOW_FAILED, "Orchestrator.executeShow", call.id, setOf("notificationsBlocked"))
             publish(call.id, result)
             return ShowOutcome(result, failReason = CoreFailReason.NOTIFICATIONS_BLOCKED, suppressReason = CoreSuppressReason.NOTIFICATIONS_BLOCKED)
@@ -152,7 +254,7 @@ class IncomingCallOrchestrator(
 
         // foregroundBehavior: silent — the app renders its own in-app UI; no
         // surface, no sound, deadline-only sweep (§6.3/§8.11); result = shown.
-        val config = repository.currentConfig()
+        // (config hoisted above for the telecom gate.)
         if (config.foregroundBehavior == CoreForegroundBehavior.SILENT && isAppForeground()) {
             trace("show", call.id, "foreground silent mode — no surface by design")
             publish(call.id, result)
@@ -416,6 +518,9 @@ class IncomingCallOrchestrator(
         }
         // LAUNCH_APP is executed by AcceptTrampolineActivity itself (§4.3): only
         // an activity context may launch from the lock screen / background.
+
+        // §8.7: mirror accept/setActive/disconnect into Telecom (no-op off/unknown).
+        mirrorTelecom(result, pre)
 
         publish(callId, result)
     }
