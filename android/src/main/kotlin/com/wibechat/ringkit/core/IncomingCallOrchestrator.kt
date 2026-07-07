@@ -64,11 +64,11 @@ class IncomingCallOrchestrator(
     private fun telecomHooks(): TelecomHooks =
         TelecomHooks(
             onHardwareAnswer = { callId ->
-                core.writer.post { IncomingCallOrchestrator(appContext, core).acceptFromActionOnWriter(callId) }
+                core.writer.post { hookOrchestrator().acceptFromActionOnWriter(callId) }
             },
             onHardwareDisconnect = { callId ->
                 core.writer.post {
-                    val orch = IncomingCallOrchestrator(appContext, core)
+                    val orch = hookOrchestrator()
                     if (repository.callFor(callId)?.state == CoreCallState.RINGING) {
                         orch.declineOnWriter(callId)
                     } else {
@@ -79,9 +79,17 @@ class IncomingCallOrchestrator(
             onSetActive = { callId -> trace("telecom", callId, "onSetActive (unhold)") },
             onSetInactive = { callId -> trace("telecom", callId, "onSetInactive (hold)") },
             onAudioRouteChanged = { callId, route ->
-                core.writer.post { IncomingCallOrchestrator(appContext, core).emitAudioRouteChanged(callId, route) }
+                core.writer.post { hookOrchestrator().emitAudioRouteChanged(callId, route) }
             },
         )
+
+    /**
+     * A fresh orchestrator for a hardware/endpoint callback re-entering on the
+     * writer — carries THIS orchestrator's [telecomProvider] so the same bridge
+     * (the process singleton in prod, the injected fake in tests) is reused.
+     */
+    private fun hookOrchestrator(): IncomingCallOrchestrator =
+        IncomingCallOrchestrator(appContext, core, telecomProvider = telecomProvider)
 
     /**
      * §6.3: a live-only `AudioRouteChanged` (never appended/replayed — §6.2) to
@@ -260,15 +268,16 @@ class IncomingCallOrchestrator(
         val telecomEnabled = record.options.useTelecom ?: config.telecomIntegration
         val telecomActive =
             telecomEnabled && (telecomProvider(appContext)?.addCall(call, telecomHooks()) ?: false)
-        if (telecomEnabled) {
-            trace(
-                "telecom", call.id,
-                if (telecomActive) {
-                    "addCall ok — CallStyle notifications-blocked exemption active"
-                } else {
-                    "addCall failed/unavailable — §8.11 re-evaluated as telecom-OFF"
-                },
+        if (telecomEnabled && !telecomActive) {
+            // §8.7: registration/addCall failure ⇒ log + diagnostics + fall back
+            // (never blocks ringing). diagnose() surfaces the incident.
+            trace("telecom", call.id, "addCall failed/unavailable — §8.11 re-evaluated as telecom-OFF")
+            ringLog.incident(
+                RingLog.IncidentType.TELECOM_FALLBACK, "Orchestrator.executeShow", call.id,
+                data = mapOf("note" to "telecom registration/addCall failed — fell back to non-telecom"),
             )
+        } else if (telecomActive) {
+            trace("telecom", call.id, "addCall ok — CallStyle notifications-blocked exemption active")
         }
 
         // Row 1/3: notifications blocked / incoming channel blocked → failed,

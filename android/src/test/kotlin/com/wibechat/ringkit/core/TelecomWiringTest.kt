@@ -13,6 +13,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
+import java.io.File
 
 /**
  * §8.7 / §8.11 telecom WIRING against a fake [TelecomBridge] — a real
@@ -54,12 +55,15 @@ class TelecomWiringTest {
         val disconnects = mutableListOf<Pair<String, TelecomDisconnectCause>>()
         val audioRouteRequests = mutableListOf<CoreAudioRoute>()
         var setAudioRouteResult = true
+        /** Captured so tests can fire hardware callbacks (BT/watch answer, §8.7). */
+        var lastHooks: TelecomHooks? = null
         private var reg = false
 
         override val isRegistered: Boolean get() = reg
 
         override fun addCall(call: CoreIncomingCall, hooks: TelecomHooks): Boolean {
             order.add("addCall")
+            lastHooks = hooks
             reg = addCallResult
             return addCallResult
         }
@@ -249,5 +253,71 @@ class TelecomWiringTest {
         assertEquals(1, delivered.size)
         assertEquals(CoreEventType.AUDIO_ROUTE_CHANGED, delivered.single().type)
         assertEquals(CoreAudioRoute.SPEAKER, delivered.single().audioRoute)
+    }
+
+    // ── hardware answer/disconnect routing (§8.7, R30, M5.3) ─────────────
+    // The BT/watch/wired callbacks arrive via the addCall hooks; here we fire
+    // the captured hooks (a real device does this) and drain the writer. Proves
+    // the routing that on-device BT hardware would exercise.
+
+    @Test
+    fun hardware_answer_routes_into_the_standard_accept_path() {
+        enableTelecom()
+        val bridge = FakeBridge(addCallResult = true)
+        val orch = orchestrator(bridge)
+        orch.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+
+        bridge.lastHooks!!.onHardwareAnswer("c-1")
+        core.writer.await { } // drain the posted accept (FIFO single writer)
+
+        assertEquals("BT answer → standard accept path", CoreCallState.ACCEPTED, core.repository.callFor("c-1")?.state)
+    }
+
+    @Test
+    fun hardware_disconnect_of_a_ringing_call_declines() {
+        enableTelecom()
+        val bridge = FakeBridge(addCallResult = true)
+        val orch = orchestrator(bridge)
+        orch.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+
+        bridge.lastHooks!!.onHardwareDisconnect("c-1")
+        core.writer.await { }
+
+        assertNull("declined ⇒ no live record", core.repository.callFor("c-1"))
+        assertEquals(TerminalType.DECLINED, core.repository.tombstoneFor("c-1")?.terminalType)
+    }
+
+    @Test
+    fun hardware_disconnect_of_an_active_call_ends_it() {
+        enableTelecom()
+        val bridge = FakeBridge(addCallResult = true)
+        val orch = orchestrator(bridge)
+        orch.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+        orch.acceptProgrammaticOnWriter("c-1")
+        orch.setConnectedOnWriter("c-1")
+
+        bridge.lastHooks!!.onHardwareDisconnect("c-1")
+        core.writer.await { }
+
+        assertNull(core.repository.callFor("c-1"))
+        assertEquals("active + hardware end → ENDED (not decline)", TerminalType.ENDED, core.repository.tombstoneFor("c-1")?.terminalType)
+    }
+
+    // ── fallback diagnostics (§8.7, M5.5) ────────────────────────────────
+
+    @Test
+    fun telecom_addCall_failure_records_a_TELECOM_FALLBACK_incident() {
+        enableTelecom()
+        val orch = orchestrator(FakeBridge(addCallResult = false))
+        orch.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+
+        assertTrue(core.ringLog.awaitDrained())
+        val incidentsDir =
+            File(File(File(context.applicationContext.noBackupFilesDir, CoreStore.DIR_NAME), "logs"), "incidents")
+        val recorded =
+            (incidentsDir.listFiles() ?: emptyArray())
+                .filter { it.name.endsWith(".jsonl") }
+                .any { it.readText().contains("incident:TELECOM_FALLBACK") }
+        assertTrue("addCall failure ⇒ TELECOM_FALLBACK incident so diagnose() reports it (§8.7)", recorded)
     }
 }

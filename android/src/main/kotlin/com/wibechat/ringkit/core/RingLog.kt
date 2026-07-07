@@ -75,6 +75,7 @@ class RingLog internal constructor(
         WATCHDOG_FIRED,
         PARSE_REJECTED,
         FCM_DOWNGRADED,
+        TELECOM_FALLBACK,
     }
 
     /** Config logLevel (§11.4): gates the logcat tee + PII redaction, not capture. */
