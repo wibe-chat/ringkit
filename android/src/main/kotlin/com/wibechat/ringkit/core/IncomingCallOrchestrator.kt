@@ -78,7 +78,42 @@ class IncomingCallOrchestrator(
             },
             onSetActive = { callId -> trace("telecom", callId, "onSetActive (unhold)") },
             onSetInactive = { callId -> trace("telecom", callId, "onSetInactive (hold)") },
+            onAudioRouteChanged = { callId, route ->
+                core.writer.post { IncomingCallOrchestrator(appContext, core).emitAudioRouteChanged(callId, route) }
+            },
         )
+
+    /**
+     * §6.3: a live-only `AudioRouteChanged` (never appended/replayed — §6.2) to
+     * the designated engine. Endpoint changes originate off the writer (the
+     * adapter's collector), so this is posted back onto it.
+     */
+    fun emitAudioRouteChanged(callId: String, route: CoreAudioRoute) {
+        val record = repository.callFor(callId) ?: return
+        val event =
+            CoreEvent(
+                seq = repository.eventLog.drawSeq(),
+                callId = callId,
+                type = CoreEventType.AUDIO_ROUTE_CHANGED,
+                callInfo = record.info,
+                wallMs = core.time.wallMs(),
+                elapsedMs = core.time.elapsedMs(),
+                bootCount = core.time.bootCount(),
+                audioRoute = route,
+            )
+        core.liveSink?.invoke(listOf(event), null)
+    }
+
+    /**
+     * §6.1 `setAudioRoute` — telecom module only. `wrongState` (false) when
+     * telecom is off or there is no active telecom call; otherwise the bridge's
+     * honest ok/wrongState from `requestEndpointChange`. Never a stub.
+     */
+    fun setAudioRouteOnWriter(route: CoreAudioRoute): Boolean {
+        if (!repository.currentConfig().telecomIntegration) return false
+        val bridge = telecomProvider(appContext) ?: return false
+        return bridge.setAudioRoute(route)
+    }
 
     /**
      * §8.7 answer/setActive/disconnect mirroring: reflect a transition's new

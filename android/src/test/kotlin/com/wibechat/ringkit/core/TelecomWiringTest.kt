@@ -52,6 +52,8 @@ class TelecomWiringTest {
         val answers = mutableListOf<String>()
         val actives = mutableListOf<String>()
         val disconnects = mutableListOf<Pair<String, TelecomDisconnectCause>>()
+        val audioRouteRequests = mutableListOf<CoreAudioRoute>()
+        var setAudioRouteResult = true
         private var reg = false
 
         override val isRegistered: Boolean get() = reg
@@ -66,6 +68,11 @@ class TelecomWiringTest {
         override fun onLocalActive(callId: String) { actives.add(callId) }
         override fun onLocalDisconnect(callId: String, cause: TelecomDisconnectCause) {
             disconnects.add(callId to cause)
+        }
+
+        override fun setAudioRoute(route: CoreAudioRoute): Boolean {
+            audioRouteRequests.add(route)
+            return setAudioRouteResult
         }
     }
 
@@ -199,5 +206,48 @@ class TelecomWiringTest {
             "the evicted waiting call disconnects its Telecom session (MISSED)",
             bridge.disconnects.contains("c-2" to TelecomDisconnectCause.MISSED),
         )
+    }
+
+    // ── audio routing (§6.3, M5.4) ───────────────────────────────────────
+
+    @Test
+    fun setAudioRoute_off_returns_wrongState_and_never_touches_the_bridge() {
+        val bridge = FakeBridge(addCallResult = true)
+        val orch = orchestrator(bridge)
+        assertFalse("wrongState when telecom is off", orch.setAudioRouteOnWriter(CoreAudioRoute.SPEAKER))
+        assertTrue("bridge untouched when off (no classload)", bridge.audioRouteRequests.isEmpty())
+    }
+
+    @Test
+    fun setAudioRoute_on_delegates_to_the_bridge_and_reports_ok() {
+        enableTelecom()
+        val bridge = FakeBridge(addCallResult = true).apply { setAudioRouteResult = true }
+        val orch = orchestrator(bridge)
+        assertTrue(orch.setAudioRouteOnWriter(CoreAudioRoute.BLUETOOTH))
+        assertEquals(listOf(CoreAudioRoute.BLUETOOTH), bridge.audioRouteRequests)
+    }
+
+    @Test
+    fun setAudioRoute_on_but_route_unavailable_reports_wrongState() {
+        enableTelecom()
+        val bridge = FakeBridge(addCallResult = true).apply { setAudioRouteResult = false }
+        val orch = orchestrator(bridge)
+        assertFalse("no matching endpoint ⇒ wrongState (G3)", orch.setAudioRouteOnWriter(CoreAudioRoute.WIRED_HEADSET))
+    }
+
+    @Test
+    fun audio_route_change_emits_a_live_only_event() {
+        enableTelecom()
+        val delivered = mutableListOf<CoreEvent>()
+        core.liveSink = { events, _ -> delivered.addAll(events); true }
+        val orch = orchestrator(FakeBridge(addCallResult = true))
+        orch.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+        delivered.clear() // drop the CallRinging emitted by show
+
+        orch.emitAudioRouteChanged("c-1", CoreAudioRoute.SPEAKER)
+
+        assertEquals(1, delivered.size)
+        assertEquals(CoreEventType.AUDIO_ROUTE_CHANGED, delivered.single().type)
+        assertEquals(CoreAudioRoute.SPEAKER, delivered.single().audioRoute)
     }
 }

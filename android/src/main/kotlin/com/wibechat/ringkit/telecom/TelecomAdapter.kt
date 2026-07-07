@@ -5,7 +5,9 @@ import android.net.Uri
 import android.telecom.DisconnectCause
 import androidx.core.telecom.CallAttributesCompat
 import androidx.core.telecom.CallControlScope
+import androidx.core.telecom.CallEndpointCompat
 import androidx.core.telecom.CallsManager
+import com.wibechat.ringkit.core.CoreAudioRoute
 import com.wibechat.ringkit.core.CoreCallType
 import com.wibechat.ringkit.core.CoreIncomingCall
 import com.wibechat.ringkit.core.TelecomBridge
@@ -22,30 +24,27 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * The only core-telecom-aware class (PLAN §8.7, D7). Implements [TelecomBridge]
- * against `androidx.core:core-telecom` 1.0.1: lazy `registerAppWithTelecom` at
- * the first telecom-enabled show, per-call `addCall`, and answer/setActive/
- * disconnect mirrored from the state machine.
+ * The only core-telecom-aware class (PLAN §8.7 / §6.3, D7). Implements
+ * [TelecomBridge] against `androidx.core:core-telecom` 1.0.1: lazy
+ * `registerAppWithTelecom`, per-call `addCall`, answer/setActive/disconnect
+ * mirrored from the state machine, audio-endpoint observation
+ * (`AudioRouteChanged`), and `setAudioRoute` via `requestEndpointChange`.
  *
- * **Threading model.** `core-telecom`'s `addCall` is a *suspend* function that
- * stays suspended for the whole lifetime of the call, and its `block` receives a
- * [CallControlScope] which is itself a `CoroutineScope` whose drivers
- * (`answer`/`setActive`/`disconnect`) are suspend. The orchestrator, however,
- * calls the [TelecomBridge] mirror methods **synchronously on the writer
- * executor**. We bridge the two with a per-call command [Channel]: inside the
- * `block` we launch a loop that drains commands and invokes the scope drivers;
- * the writer-thread mirror calls just `trySend` into the channel (non-blocking).
- * The call ends when the drain loop calls `disconnect`.
+ * **Threading model.** `addCall` is a *suspend* function that wraps its `block`
+ * in `coroutineScope` (bytecode-verified) — it stays suspended until every child
+ * launched in the [CallControlScope] completes. The orchestrator calls the
+ * mirror methods **synchronously on the writer executor**, so a per-call command
+ * [Channel] bridges the two: `block` launches a drain loop (invokes the suspend
+ * scope drivers) plus endpoint collectors; the writer-thread mirror calls just
+ * `trySend`. On disconnect the drain loop cancels the collectors so the
+ * `coroutineScope` can complete and the call ends (else infinite collectors
+ * would hang it — the M5.2 self-check lesson).
  *
  * [addCall] blocks the writer *briefly* (bounded by [READY_TIMEOUT_MS]) to honor
- * the addCall-BEFORE-post ordering: the caller must not post the notification
- * until Telecom reports the call, or the notifications-blocked bypass (§8.11
- * row 2) races and fails. On timeout/failure it returns false and the caller
- * falls back to non-telecom (never blocks ringing, §8.7).
+ * addCall-BEFORE-post ordering; failure/timeout ⇒ false ⇒ non-telecom fallback.
  *
- * The fine callback semantics (hardware answer, hold/unhold) are device-verified
- * in M5.3/M5.7 — Robolectric fakes [TelecomBridge] since a real `CallsManager`
- * needs a live system Telecom service.
+ * Real behavior is device-verified (M5.3/M5.7) — Robolectric fakes [TelecomBridge]
+ * since a real `CallsManager` needs a live system Telecom service.
  */
 class TelecomAdapter internal constructor(context: Context) : TelecomBridge {
 
@@ -59,13 +58,23 @@ class TelecomAdapter internal constructor(context: Context) : TelecomBridge {
 
     override val isRegistered: Boolean get() = registered
 
-    private val calls = ConcurrentHashMap<String, Channel<Cmd>>()
+    private val calls = ConcurrentHashMap<String, CallHandle>()
 
-    /** Commands pushed from the writer thread into a call's suspend loop. */
     private sealed interface Cmd {
         object Answer : Cmd
         object Active : Cmd
         data class Disconnect(val cause: DisconnectCause) : Cmd
+    }
+
+    private class CallHandle(
+        val control: CallControlScope,
+        val commands: Channel<Cmd>,
+        val callType: Int,
+    ) {
+        /** Latest availableEndpoints (for setAudioRoute matching). */
+        @Volatile var available: List<CallEndpointCompat> = emptyList()
+        /** True once answered/active — preferred target for setAudioRoute. */
+        @Volatile var active: Boolean = false
     }
 
     override fun addCall(call: CoreIncomingCall, hooks: TelecomHooks): Boolean {
@@ -84,14 +93,10 @@ class TelecomAdapter internal constructor(context: Context) : TelecomBridge {
                 callType,
             )
 
-        // Completed from inside the addCall block once Telecom has the call.
         val ready = CompletableDeferred<Boolean>()
         adapterScope.launch {
             val commands = Channel<Cmd>(Channel.BUFFERED)
             try {
-                // Positional args (the SDK's Kotlin param names are not part of
-                // the verified public signature): attrs, onAnswer(callType),
-                // onDisconnect(cause), onSetActive, onSetInactive, then block.
                 callsManager.addCall(
                     attributes,
                     { _ -> hooks.onHardwareAnswer(call.id) },
@@ -99,16 +104,31 @@ class TelecomAdapter internal constructor(context: Context) : TelecomBridge {
                     { hooks.onSetActive(call.id) },
                     { hooks.onSetInactive(call.id) },
                 ) {
-                    // this: CallControlScope (a CoroutineScope). The call is now
-                    // registered with Telecom — signal the waiting writer, then
-                    // launch the drain loop that owns the call's lifetime.
-                    calls[call.id] = commands
+                    // this: CallControlScope (a CoroutineScope) — the call is registered.
+                    val control = this@addCall
+                    val handle = CallHandle(control, commands, callType)
+                    calls[call.id] = handle
                     ready.complete(true)
-                    launch { drainCommands(this@addCall, commands, callType) }
+
+                    // §6.3: emit route changes; track availables for setAudioRoute.
+                    val endpointJob =
+                        launch {
+                            control.currentCallEndpoint.collect { ep ->
+                                hooks.onAudioRouteChanged(call.id, mapEndpoint(ep.type))
+                            }
+                        }
+                    val availableJob =
+                        launch { control.availableEndpoints.collect { handle.available = it } }
+
+                    // Drain mirror commands until disconnect, then cancel the
+                    // collectors so coroutineScope completes and the call ends.
+                    launch {
+                        drainCommands(handle)
+                        endpointJob.cancel()
+                        availableJob.cancel()
+                    }
                 }
             } catch (t: Throwable) {
-                // Registration/addCall failure (incl. cold-process quirks, §8.7):
-                // signal fallback; the caller re-evaluates §8.11 as telecom-OFF.
                 ready.complete(false)
             } finally {
                 commands.close()
@@ -120,34 +140,46 @@ class TelecomAdapter internal constructor(context: Context) : TelecomBridge {
         } ?: false
     }
 
-    /** Drains writer-pushed commands into the suspend scope drivers until disconnect. */
-    private suspend fun drainCommands(control: CallControlScope, commands: Channel<Cmd>, callType: Int) {
-        var active = false
-        for (cmd in commands) {
+    private suspend fun drainCommands(handle: CallHandle) {
+        for (cmd in handle.commands) {
             when (cmd) {
-                Cmd.Answer -> if (!active) { control.answer(callType); active = true }
-                Cmd.Active -> if (!active) { control.setActive(); active = true }
+                Cmd.Answer -> if (!handle.active) { handle.control.answer(handle.callType); handle.active = true }
+                Cmd.Active -> if (!handle.active) { handle.control.setActive(); handle.active = true }
                 is Cmd.Disconnect -> {
-                    control.disconnect(cmd.cause)
-                    return // returning ends the drain ⇒ the call session ends
+                    handle.control.disconnect(cmd.cause)
+                    return
                 }
             }
         }
     }
 
     override fun onLocalAnswer(callId: String) {
-        calls[callId]?.trySend(Cmd.Answer)
+        calls[callId]?.commands?.trySend(Cmd.Answer)
     }
 
     override fun onLocalActive(callId: String) {
-        calls[callId]?.trySend(Cmd.Active)
+        calls[callId]?.commands?.trySend(Cmd.Active)
     }
 
     override fun onLocalDisconnect(callId: String, cause: TelecomDisconnectCause) {
-        calls[callId]?.trySend(Cmd.Disconnect(mapCause(cause)))
+        calls[callId]?.commands?.trySend(Cmd.Disconnect(mapCause(cause)))
     }
 
-    /** Registers once per process; any failure ⇒ false ⇒ non-telecom fallback. */
+    override fun setAudioRoute(route: CoreAudioRoute): Boolean {
+        // Prefer the active call; fall back to any registered telecom call.
+        val handle = calls.values.firstOrNull { it.active } ?: calls.values.firstOrNull() ?: return false
+        val targetType = coreRouteToEndpointType(route)
+        val endpoint = handle.available.firstOrNull { it.type == targetType } ?: return false
+        return try {
+            // The actual route confirmation surfaces as a subsequent AudioRouteChanged
+            // (currentCallEndpoint) — G3: the reported event matches reality.
+            runBlocking { handle.control.requestEndpointChange(endpoint) }
+            true
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
     private fun ensureRegistered(): Boolean {
         if (registered) return true
         synchronized(registerLock) {
@@ -165,6 +197,24 @@ class TelecomAdapter internal constructor(context: Context) : TelecomBridge {
         }
     }
 
+    private fun mapEndpoint(type: Int): CoreAudioRoute =
+        when (type) {
+            CallEndpointCompat.TYPE_EARPIECE -> CoreAudioRoute.EARPIECE
+            CallEndpointCompat.TYPE_SPEAKER -> CoreAudioRoute.SPEAKER
+            CallEndpointCompat.TYPE_BLUETOOTH -> CoreAudioRoute.BLUETOOTH
+            CallEndpointCompat.TYPE_WIRED_HEADSET -> CoreAudioRoute.WIRED_HEADSET
+            else -> CoreAudioRoute.UNKNOWN
+        }
+
+    private fun coreRouteToEndpointType(route: CoreAudioRoute): Int =
+        when (route) {
+            CoreAudioRoute.EARPIECE -> CallEndpointCompat.TYPE_EARPIECE
+            CoreAudioRoute.SPEAKER -> CallEndpointCompat.TYPE_SPEAKER
+            CoreAudioRoute.BLUETOOTH -> CallEndpointCompat.TYPE_BLUETOOTH
+            CoreAudioRoute.WIRED_HEADSET -> CallEndpointCompat.TYPE_WIRED_HEADSET
+            CoreAudioRoute.UNKNOWN -> CallEndpointCompat.TYPE_UNKNOWN
+        }
+
     private fun mapCause(cause: TelecomDisconnectCause): DisconnectCause =
         when (cause) {
             TelecomDisconnectCause.LOCAL -> DisconnectCause(DisconnectCause.LOCAL)
@@ -174,7 +224,6 @@ class TelecomAdapter internal constructor(context: Context) : TelecomBridge {
             TelecomDisconnectCause.ERROR -> DisconnectCause(DisconnectCause.ERROR)
         }
 
-    /** core-telecom requires a schema Uri address; map handles best-effort. */
     private fun handleToUri(handle: String?): Uri {
         val h = handle?.takeIf { it.isNotBlank() } ?: return Uri.fromParts("sip", "unknown", null)
         val scheme = if (h.all { it.isDigit() || it in "+-() " }) "tel" else "sip"
@@ -190,9 +239,9 @@ class TelecomAdapter internal constructor(context: Context) : TelecomBridge {
 
         /**
          * Process-wide lazy provider (default seam target for the orchestrator).
-         * Returns null if `CallsManager` can't even be constructed (⇒ the caller
-         * proceeds telecom-OFF). Only invoked on the telecom-enabled branch, so a
-         * telecom-OFF path never classloads this class or core-telecom.
+         * Returns null if `CallsManager` can't even be constructed. Only invoked
+         * on the telecom-enabled branch, so a telecom-OFF path never classloads
+         * this class or core-telecom.
          */
         fun getOrCreate(context: Context): TelecomBridge? {
             instance?.let { return it }

@@ -48,6 +48,14 @@ interface TelecomBridge {
     /** Mirror a terminal transition into Telecom `disconnect(cause)`; drops the call. */
     fun onLocalDisconnect(callId: String, cause: TelecomDisconnectCause)
 
+    /**
+     * Route the active telecom call's audio to [route] via `requestEndpointChange`
+     * (§6.3, M5.4). Returns true iff a matching available endpoint was requested;
+     * false when there is no active telecom call or the route is unavailable ⇒ the
+     * caller reports `wrongState` (§6.1). No-op-false is honest, never a stub.
+     */
+    fun setAudioRoute(route: CoreAudioRoute): Boolean
+
     /** True once `registerAppWithTelecom` has succeeded this process (diagnostics). */
     val isRegistered: Boolean
 }
@@ -67,6 +75,8 @@ class TelecomHooks(
     val onSetInactive: (callId: String) -> Unit = {},
     /** Telecom requested active (unhold) — trace-only in v1. */
     val onSetActive: (callId: String) -> Unit = {},
+    /** Current endpoint changed (BT connect/disconnect, etc.) → a live AudioRouteChanged event (§6.3, M5.4). */
+    val onAudioRouteChanged: (callId: String, route: CoreAudioRoute) -> Unit = { _, _ -> },
 )
 
 /**

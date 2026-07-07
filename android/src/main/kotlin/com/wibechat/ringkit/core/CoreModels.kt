@@ -21,6 +21,9 @@ enum class CoreCancelReason { CALLER_CANCELLED, ANSWERED_ELSEWHERE, DECLINED_ELS
 
 enum class CoreEventType { RINGING, ACCEPTED, DECLINED, TIMED_OUT, ENDED, CANCELLED, MISSED_CALL_TAPPED, AUDIO_ROUTE_CHANGED }
 
+/** §6.3 audio endpoints (telecom module only); names mirror the Pigeon `AudioRoute`. */
+enum class CoreAudioRoute { EARPIECE, SPEAKER, BLUETOOTH, WIRED_HEADSET, UNKNOWN }
+
 enum class CoreDeliveryPath { LIVE, REPLAYED, BACKGROUND }
 
 enum class CoreNotificationVisibility { PUBLIC, PRIVATE, SECRET }
@@ -187,6 +190,8 @@ data class CoreEvent(
     val consumed: Boolean = false,
     /** Headless-delivery lease expiry (elapsed ms), §10.2; null = un-leased. */
     val leaseUntilElapsedMs: Long? = null,
+    /** Set only on live AUDIO_ROUTE_CHANGED events (§6.3, telecom); never persisted. */
+    val audioRoute: CoreAudioRoute? = null,
 )
 
 /** §8.10 cold-install defaults; every field clamps invalid input (never throws). */

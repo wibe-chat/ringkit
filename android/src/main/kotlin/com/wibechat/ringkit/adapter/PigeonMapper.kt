@@ -209,7 +209,13 @@ internal object PigeonMapper {
             suppressed = if (suppress != null && event.type == CoreEventType.RINGING) true else null,
             suppressReason =
                 if (suppress != null && event.type == CoreEventType.RINGING) suppressReason(suppress) else null,
+            // §6.3: only AUDIO_ROUTE_CHANGED carries a route (identical enum names).
+            audioRoute = event.audioRoute?.let { AudioRoute.valueOf(it.name) },
         )
+
+    /** §6.1 setAudioRoute input mapping (Pigeon ↔ core; names are identical). */
+    fun audioRouteToCore(route: AudioRoute): com.wibechat.ringkit.core.CoreAudioRoute =
+        com.wibechat.ringkit.core.CoreAudioRoute.valueOf(route.name)
 
     fun activeCall(record: CallRecord): ActiveCall =
         ActiveCall(

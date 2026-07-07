@@ -116,8 +116,13 @@ internal class RingKitHostApiImpl(
 
     override fun setAudioRoute(route: AudioRoute, callback: (Result<CallCommandResult>) -> Unit) =
         onWriter(callback) {
-            // Telecom module only (§6.1); flag-gated behavior lands in Phase 4.
-            CallCommandResult.WRONG_STATE
+            // §6.3 telecom module only: honest ok when the endpoint change is
+            // requested, else wrongState (telecom off / no active telecom call).
+            if (orchestrator.setAudioRouteOnWriter(PigeonMapper.audioRouteToCore(route))) {
+                CallCommandResult.OK
+            } else {
+                CallCommandResult.WRONG_STATE
+            }
         }
 
     override fun activeCalls(callback: (Result<List<ActiveCall>>) -> Unit) =
