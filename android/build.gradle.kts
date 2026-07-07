@@ -79,6 +79,13 @@ dependencies {
     // has been in core since 1.5; the 1.19 promoted-notification APIs are the
     // Phase-4 Android 16 polish. Revisit with the toolchain bump.
     implementation("androidx.core:core-ktx:1.17.0")
+    // D7 / §8.7: the flag-gated telecom/ module. Ships UNCONDITIONALLY (small androidx
+    // artifact) — telecomIntegration/useTelecom gates all behavior, not the artifact.
+    // 1.0.1 = latest STABLE (re-verified Google Maven 2026-07-07: the 1.1.0 line is
+    // alpha-only — 1.1.0-alpha06 — ineligible under the stable-only toolchain rule).
+    // NOTE: its AAR contributes MANAGE_OWN_CALLS (normal, auto-granted) to every
+    // consumer's merged manifest even when telecom is OFF — documented in INTEGRATION.
+    implementation("androidx.core:core-telecom:1.0.1")
     // §10.2 durable killed-state delivery host on API 26–33 (expedited
     // OneTimeWorkRequest, survives process death + reboot) + §11.5 uploader.
     // adapter/ + telemetry/ ONLY — core/ stays zero-WorkManager (PLAN §13.1).

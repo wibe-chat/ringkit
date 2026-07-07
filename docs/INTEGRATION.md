@@ -294,6 +294,27 @@ final report = await RingKit.diagnose();
 
 Every "didn't ring" support case starts with `diagnose()` output.
 
+### Telecom permissions in your merged manifest
+
+ringkit bundles Jetpack's `androidx.core:core-telecom` so the optional telecom integration (system audio
+routing, Bluetooth/watch answer buttons) is available the moment you flip `telecomIntegration: true` — no
+extra dependency on your side. Because that library ships unconditionally, its manifest merges into **every**
+app that uses ringkit, **even with telecom turned off**, adding:
+
+| Permission / component | What it's for |
+|---|---|
+| `BLUETOOTH_CONNECT` (runtime, Android 12+) | Detecting and routing to Bluetooth call audio devices |
+| `MODIFY_AUDIO_SETTINGS` | Switching the call audio route (earpiece/speaker/BT) |
+| `MANAGE_OWN_CALLS` | Registering your calls with the system (also used by the phone-call foreground service) |
+| A system-bound `ConnectionService` (`BIND_TELECOM_CONNECTION_SERVICE`) | Jetpack's self-managed call plumbing; only the OS Telecom service can bind it |
+| An exported `MuteStateReceiver` (Android 13 and below) | Jetpack listens for the system `MICROPHONE_MUTE_CHANGED` broadcast to mirror mute state into an active call; inert with no active telecom call |
+
+This is expected for a calling plugin and the components are inert until you enable telecom. If your app is
+subject to Play **Data safety** review, list these under the telecom/calling rationale. ringkit never
+*requests* `BLUETOOTH_CONNECT` at runtime unless you enable telecom **and** trigger a route that needs it —
+declaration in the manifest alone grants nothing. If you want a leaner manifest and will never use telecom,
+you can strip the two permissions with a `tools:node="remove"` override in your app manifest.
+
 ---
 
 ## 7. Customization
