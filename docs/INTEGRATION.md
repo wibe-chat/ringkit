@@ -12,6 +12,38 @@ arrived" and "user answered/declined".
 > Dart handler). See [What's implemented vs. coming](#whats-implemented-vs-coming) before you design
 > around not-yet-shipped features.
 
+**Related guides:** [FCM payload & Mode 1/2](FCM.md) · [Troubleshooting](TROUBLESHOOTING.md) ·
+[Migrating from flutter_callkit_incoming](MIGRATION.md)
+
+## Contents
+
+1. [Install](#1-install)
+2. [Ten-minute quickstart](#2-ten-minute-quickstart)
+3. [FCM wiring (Mode 1)](#3-fcm-wiring-mode-1--the-current-baseline)
+4. [The accept flow & your call screen](#4-the-accept-flow--your-call-screen)
+5. [Multi-call, missed calls, outgoing](#5-multi-call-missed-calls-outgoing)
+6. [Permissions & onboarding](#6-permissions--onboarding-do-this-or-calls-wont-ring)
+7. [Customization](#7-customization)
+8. [Testing your integration](#8-testing-your-integration)
+9. [What's implemented vs. coming](#9-whats-implemented-vs-coming)
+10. [Support](#10-support)
+
+## API at a glance
+
+| Call | Purpose |
+|---|---|
+| `RingKit.initialize(config)` | Persist config; idempotent, safe pre-`main`. |
+| `RingKit.events` | The single event stream (buffered, replay-inclusive). Subscribe first. |
+| `RingKit.showIncomingCall(call)` | Ring an incoming call → typed `ShowCallResult`. |
+| `RingKit.acceptCall(id)` / `declineCall(id)` | Answer/decline from your own UI. |
+| `RingKit.setCallConnected(id)` | Mark connected → chronometer starts. |
+| `RingKit.endCall(id, reason:)` / `cancelCall(id, reason:)` | End a live call / cancel a ringing one. |
+| `RingKit.startOutgoingCall(call)` | An outgoing "Calling…" leg. |
+| `RingKit.consumeLaunchAction()` | One-shot: why was the app opened? |
+| `RingKit.setBackgroundEventHandler(fn)` | Headless handler for decline-while-dead. |
+| `RingKit.permissions` | Onboarding helpers — see section 6. |
+| `RingKit.diagnose()` | Fix-it report for "didn't ring" cases. |
+
 ---
 
 ## 1. Install
@@ -377,7 +409,7 @@ immediately instead of waiting for the next launch).
 
 | Feature | Status |
 |---|---|
-| Telecom integration (`telecomIntegration: true`, `setAudioRoute`, Bluetooth/watch answer buttons) | Phase 4. `setAudioRoute` returns `wrongState` today. Keep `telecomIntegration: false`. |
+| Telecom integration (system audio routing, `setAudioRoute`, Bluetooth/watch answer) | In progress, **not yet device-verified**. Keep `telecomIntegration: false`; with it off, `setAudioRoute` returns `wrongState`. |
 | Remote telemetry upload | Planned (final pre-release scope). The `telemetry` config field is accepted but inert — nothing leaves the device. |
 | iOS | Never (by design). |
 
