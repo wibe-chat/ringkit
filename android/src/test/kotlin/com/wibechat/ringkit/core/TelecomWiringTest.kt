@@ -240,6 +240,23 @@ class TelecomWiringTest {
     }
 
     @Test
+    fun setAudioRoute_per_call_useTelecom_delegates_even_when_global_off() {
+        // Finding #6: global telecomIntegration is OFF, but a call was shown with
+        // options.useTelecom = true — it IS on telecom (addCall registered it), so
+        // setAudioRoute must delegate. The old config-only gate made it a permanent
+        // no-op for per-call opt-in calls.
+        val bridge = FakeBridge(addCallResult = true).apply { setAudioRouteResult = true }
+        val orch = orchestrator(bridge)
+        orch.showOnWriter(
+            TestSupport.incomingCall(id = "c-1").let {
+                it.copy(options = it.options.copy(useTelecom = true))
+            },
+        )
+        assertTrue("per-call useTelecom must reach the bridge (§6.3)", orch.setAudioRouteOnWriter(CoreAudioRoute.BLUETOOTH))
+        assertEquals(listOf(CoreAudioRoute.BLUETOOTH), bridge.audioRouteRequests)
+    }
+
+    @Test
     fun audio_route_change_emits_a_live_only_event() {
         enableTelecom()
         val delivered = mutableListOf<CoreEvent>()

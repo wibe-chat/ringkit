@@ -118,7 +118,17 @@ class IncomingCallOrchestrator(
      * honest ok/wrongState from `requestEndpointChange`. Never a stub.
      */
     fun setAudioRouteOnWriter(route: CoreAudioRoute): Boolean {
-        if (!repository.currentConfig().telecomIntegration) return false
+        // Per-call resolution (mirrors executeShow:268 / mirrorTelecom): a call
+        // shown with options.useTelecom = true is on telecom even when the global
+        // default is off, so gating on config.telecomIntegration ALONE would make
+        // setAudioRoute a permanent no-op for it. Enabled when the global default is
+        // on OR any live call opted in per-call; the bridge then targets whichever
+        // active telecom call it actually holds. Still keeps telecom/ un-classloaded
+        // on a fully-off path (config off + no per-call opt-in).
+        val config = repository.currentConfig()
+        val anyTelecom =
+            config.telecomIntegration || repository.activeCalls().any { it.options.useTelecom == true }
+        if (!anyTelecom) return false
         val bridge = telecomProvider(appContext) ?: return false
         return bridge.setAudioRoute(route)
     }
