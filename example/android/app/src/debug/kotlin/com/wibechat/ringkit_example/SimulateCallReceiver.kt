@@ -18,7 +18,8 @@ import com.wibechat.ringkit.core.RingKitNative
  *   adb shell am broadcast -a com.wibechat.ringkit_example.SIMULATE_CALL \
  *       --es name Alice [--es handle +1555...] [--es callId x] \
  *       [--es callType video] [--es timeoutSeconds 30] [--es sentAt <ms>] \
- *       [--es avatarUrl https://…] [--es lockScreenBehavior notificationOnly]
+ *       [--es avatarUrl https://…] [--es lockScreenBehavior notificationOnly] \
+ *       [--es useTelecom true]   # per-call telecom opt-in (§6.3 audio routing)
  *   adb shell am broadcast -a com.wibechat.ringkit_example.SIMULATE_CANCEL \
  *       --es callId x [--es reason answeredElsewhere]
  */
@@ -43,6 +44,7 @@ class SimulateCallReceiver : BroadcastReceiver() {
                 passThrough(intent, data, "ringtone", "rk.ringtone")
                 passThrough(intent, data, "vibrate", "rk.vibrate")
                 passThrough(intent, data, "lockScreenBehavior", "rk.lockScreenBehavior")
+                passThrough(intent, data, "useTelecom", "rk.useTelecom")
                 passThrough(intent, data, "extra", "rk.extra")
                 // §14.3 latency probe: stamp payload-receipt time into rk.extra —
                 // it rides into every event; the harness prints
@@ -130,6 +132,41 @@ class SimulateCallReceiver : BroadcastReceiver() {
                             // §5.1 setCallConnected (chronometer evidence, M3.4).
                             "connect" -> orchestrator.setConnectedOnWriter(callId)
                         }
+                    } finally {
+                        pending.finish()
+                    }
+                }
+                return
+            }
+            "com.wibechat.ringkit_example.SIMULATE_AUDIO_ROUTE" -> {
+                // M5.4 device trigger (§6.3): drive setAudioRoute on the writer —
+                // the SAME method the Pigeon host `setAudioRoute` targets. The
+                // Boolean result (true=ok / false=wrongState) is logged for the G3
+                // reported-result check; the audible switch is confirmed by the
+                // AudioRouteChanged event the harness console prints.
+                // Unmatched/missing route must NOT silently coerce to a real route —
+                // that would log a switch the tester never asked for (false-pass G3
+                // evidence). Reject it loudly and abort instead.
+                val requested = intent.getStringExtra("route")
+                val route = when (requested?.lowercase()) {
+                    "speaker" -> com.wibechat.ringkit.core.CoreAudioRoute.SPEAKER
+                    "earpiece" -> com.wibechat.ringkit.core.CoreAudioRoute.EARPIECE
+                    "bluetooth", "bt" -> com.wibechat.ringkit.core.CoreAudioRoute.BLUETOOTH
+                    "wired", "wiredheadset", "wired_headset" -> com.wibechat.ringkit.core.CoreAudioRoute.WIRED_HEADSET
+                    else -> {
+                        android.util.Log.e(
+                            "RingKitSim",
+                            "SIMULATE_AUDIO_ROUTE: unknown route '$requested' — expected speaker|earpiece|bluetooth|wired",
+                        )
+                        return
+                    }
+                }
+                val core = RingKitCore.get(context)
+                val pending = goAsync()
+                core.writer.post {
+                    try {
+                        val ok = IncomingCallOrchestrator(context, core).setAudioRouteOnWriter(route)
+                        android.util.Log.i("RingKitSim", "setAudioRoute($route) → ${if (ok) "ok" else "wrongState"}")
                     } finally {
                         pending.finish()
                     }

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:ringkit/ringkit.dart';
 
@@ -97,6 +98,15 @@ Future<void> dispatchRingPush(Map<String, String> data, DateTime? sentTime) asyn
   final callId = data['rk.callId'];
   if (callId == null || callId.isEmpty) return;
   if (data['rk.type'] == 'cancel') {
+    // Killed-state cancel probe — ONLY meaningful with `kMode2NativeFcm = false`.
+    // In Mode 2 the background handler returns early (line ~83) before
+    // dispatchRingPush is ever reached, so this line never runs and its absence
+    // proves nothing. When Mode 1 is active it proves the Dart handler ran for the
+    // cancel push: if you DON'T see `[rk cancel]` in `adb logcat` while the app is
+    // killed, the cancel never reached native (delivery/priority — hypothesis A),
+    // not a plugin teardown bug. debugPrintSynchronously (not debugPrint, which is
+    // throttled — deferred lines die with the short-lived headless isolate).
+    debugPrintSynchronously('[rk cancel] dispatching cancelCall id=$callId reason=${data['rk.reason']}');
     await RingKit.cancelCall(
       callId,
       reason: switch (data['rk.reason']) {
@@ -221,6 +231,7 @@ class _HarnessHomeState extends State<HarnessHome> {
           suppressed ? ' SUPPRESSED(${suppressReason?.name})' : '',
         CallEnded(:final reason) => ' reason=${reason.name}',
         CallCancelled(:final reason) => ' reason=${reason.name}',
+        AudioRouteChanged(:final route) => ' route=${route.name}',
         _ => '',
       };
       _log('#${event.sequence} ${event.runtimeType} '

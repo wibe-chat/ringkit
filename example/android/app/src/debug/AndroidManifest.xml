@@ -18,6 +18,7 @@
                 <action android:name="com.wibechat.ringkit_example.SIMULATE_ACTION" />
                 <action android:name="com.wibechat.ringkit_example.SIMULATE_OUTGOING" />
                 <action android:name="com.wibechat.ringkit_example.SIMULATE_UPDATE" />
+                <action android:name="com.wibechat.ringkit_example.SIMULATE_AUDIO_ROUTE" />
             </intent-filter>
         </receiver>
     </application>
