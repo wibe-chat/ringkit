@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.telecom.DisconnectCause
 import androidx.core.telecom.CallAttributesCompat
+import androidx.core.telecom.CallControlResult
 import androidx.core.telecom.CallControlScope
 import androidx.core.telecom.CallEndpointCompat
 import androidx.core.telecom.CallsManager
@@ -172,9 +173,17 @@ class TelecomAdapter internal constructor(context: Context) : TelecomBridge {
         val endpoint = handle.available.firstOrNull { it.type == targetType } ?: return false
         return try {
             // The actual route confirmation surfaces as a subsequent AudioRouteChanged
-            // (currentCallEndpoint) — G3: the reported event matches reality.
-            runBlocking { handle.control.requestEndpointChange(endpoint) }
-            true
+            // (currentCallEndpoint) — G3: the reported event matches reality, so we
+            // only report ok when Telecom accepted the change. A rejected change
+            // returns CallControlResult.Error (does NOT throw), and the request is
+            // bounded so a hung call can't wedge the single writer thread forever.
+            val result =
+                runBlocking {
+                    withTimeoutOrNull(ENDPOINT_CHANGE_TIMEOUT_MS) {
+                        handle.control.requestEndpointChange(endpoint)
+                    }
+                }
+            result is CallControlResult.Success
         } catch (t: Throwable) {
             false
         }
@@ -233,6 +242,9 @@ class TelecomAdapter internal constructor(context: Context) : TelecomBridge {
     companion object {
         /** Bounded writer block enforcing addCall-before-post; ≪ the §8.7 5 s rule. */
         const val READY_TIMEOUT_MS = 2_000L
+
+        /** Bounds a `requestEndpointChange` so a hung call can't wedge the writer thread. */
+        const val ENDPOINT_CHANGE_TIMEOUT_MS = 2_000L
 
         @Volatile
         private var instance: TelecomBridge? = null
