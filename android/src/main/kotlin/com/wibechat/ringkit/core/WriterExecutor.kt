@@ -57,7 +57,41 @@ class WriterExecutor internal constructor(private val executor: ExecutorService)
         return out!!.getOrThrow()
     }
 
+    /**
+     * Like [await] but reports the three outcomes distinctly instead of collapsing
+     * a writer-busy timeout into the same failure as a block that threw: callers
+     * that must NOT treat "the writer was too busy to answer in time" as an
+     * authoritative result (e.g. the FSI bind — a telecom `addCall` can legally
+     * hold the writer up to its own budget) can fail-open on [AwaitOutcome.TimedOut]
+     * rather than acting on a phantom empty (R45).
+     */
+    fun <T> awaitCatching(timeoutMs: Long = 5_000L, block: () -> T): AwaitOutcome<T> {
+        val latch = CountDownLatch(1)
+        var out: Result<T>? = null
+        executor.execute {
+            out = runCatching(block)
+            latch.countDown()
+        }
+        if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS)) return AwaitOutcome.TimedOut
+        return out!!.fold(
+            onSuccess = { AwaitOutcome.Completed(it) },
+            onFailure = { AwaitOutcome.Failed(it) },
+        )
+    }
+
     fun shutdown() {
         executor.shutdown()
     }
+}
+
+/** Three distinct outcomes of [WriterExecutor.awaitCatching]. */
+sealed interface AwaitOutcome<out T> {
+    /** The block ran and produced [value] (which may itself be null). */
+    data class Completed<out T>(val value: T) : AwaitOutcome<T>
+
+    /** The writer did not answer within the budget — no authoritative result. */
+    object TimedOut : AwaitOutcome<Nothing>
+
+    /** The block ran but threw [error]. */
+    data class Failed(val error: Throwable) : AwaitOutcome<Nothing>
 }
