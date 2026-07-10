@@ -17,6 +17,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.window.OnBackInvokedDispatcher
 import com.wibechat.ringkit.R
+import com.wibechat.ringkit.core.AwaitOutcome
 import com.wibechat.ringkit.core.CallRecord
 import com.wibechat.ringkit.core.CoreCallState
 import com.wibechat.ringkit.core.CoreCallType
@@ -44,6 +45,10 @@ import com.wibechat.ringkit.services.RingingService
 class IncomingCallActivity : Activity() {
 
     private lateinit var core: RingKitCore.Instance
+    // Main-thread confined: written at the end of bind() and read by bind()/key +
+    // action handlers, all of which run on main — the bus listener reads it inside
+    // runOnUiThread, never off the writer thread. No cross-thread access ⇒ no
+    // @Volatile (§8.5).
     private var boundCallId: String? = null
     private var renderedCallId: String? = null
     private var busSubscription: AutoCloseable? = null
@@ -80,12 +85,19 @@ class IncomingCallActivity : Activity() {
         }
 
         busSubscription = core.bus.subscribe { _ ->
-            if (boundCallId == null) return@subscribe
             // Any repository mutation re-resolves the binding (§8.5): the bound
             // call's terminal transition re-binds to the promoted owner when
             // other RINGING calls survive (§5.2) — otherwise finishes ≤250 ms;
             // waiting-call arrivals/terminations refresh the banner.
-            runOnUiThread { if (!isFinishing) bind(boundCallId) }
+            //
+            // NEVER short-circuit on a null boundCallId. This listener fires on
+            // the writer thread, and in the killed-state FSI cold-start a remote
+            // cancel can publish here BEFORE onCreate's initial bind has committed
+            // boundCallId on main (writer.await releases main, then the writer
+            // runs the very next queued transition). The old null-guard dropped
+            // that terminal signal and left the FSI ringing forever. Re-resolve
+            // from the intent when still unbound; bind() finishes on a null owner.
+            runOnUiThread { if (!isFinishing) bind(boundCallId ?: RingKitIntents.callIdOf(intent)) }
         }
 
         bind(RingKitIntents.callIdOf(intent))
@@ -131,6 +143,7 @@ class IncomingCallActivity : Activity() {
     // ── binding & rendering (repository lookup on the writer, render on main) ──
 
     private fun bind(intentCallId: String?) {
+        if (isFinishing) return // a terminal signal already won the teardown
         if (intentCallId == null && boundCallId == null) {
             // Process-death restore with a stale/null intent: finish quietly (§8.5).
             finish()
@@ -139,15 +152,39 @@ class IncomingCallActivity : Activity() {
         // §8.5: binding always resolves to the CURRENT ringer-owner — the
         // intent's call id is advisory (a waiting call's FSI launch renders the
         // owner + banner; a terminal signal re-binds to the promoted owner).
+        //
+        // R45: distinguish a writer-busy TIMEOUT from a genuine empty. With telecom
+        // on, `addCall` can legally hold the writer up to READY_TIMEOUT_MS (2 s) —
+        // exactly this budget. Collapsing that timeout into "no owner" self-destructs
+        // the FSI answer UI mid-ring. Fail-open on timeout/failure: keep the UI
+        // alive; the next repository mutation re-fires the bus and re-binds once the
+        // writer is free. Only a COMPLETED lookup is authoritative enough to finish.
         val snapshot =
-            runCatching {
-                core.writer.await(timeoutMs = 2_000L) {
+            when (val outcome =
+                core.writer.awaitCatching(timeoutMs = BIND_TIMEOUT_MS) {
                     val ringing = core.repository.activeCalls().filter { it.state == CoreCallState.RINGING }
                     ringing.firstOrNull() to (ringing.size - 1)
                 }
-            }.getOrNull()
+            ) {
+                is AwaitOutcome.Completed -> outcome.value
+                is AwaitOutcome.TimedOut -> {
+                    core.ringLog.log(
+                        CoreLogLevel.INFO, "fsi", "IncomingCallActivity.bind", intentCallId ?: boundCallId,
+                        "writer busy — bind timed out, keeping UI alive (fail-open, R45)",
+                    )
+                    return
+                }
+                is AwaitOutcome.Failed -> {
+                    core.ringLog.log(
+                        CoreLogLevel.ERROR, "fsi", "IncomingCallActivity.bind", intentCallId ?: boundCallId,
+                        "owner lookup failed — keeping UI alive (fail-open)",
+                        mapOf("error" to (outcome.error.message ?: outcome.error.javaClass.simpleName)),
+                    )
+                    return
+                }
+            }
 
-        val owner = snapshot?.first
+        val owner = snapshot.first
         if (owner == null) {
             core.ringLog.log(
                 CoreLogLevel.INFO, "fsi", "IncomingCallActivity.bind", intentCallId ?: boundCallId,
@@ -360,5 +397,24 @@ class IncomingCallActivity : Activity() {
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             insets
         }
+    }
+
+    /**
+     * Test seam (avoids reflecting on a private field): reproduce the killed-state
+     * cold-start race where a terminal signal arrives before onCreate's initial
+     * bind has committed `boundCallId`.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun setBoundCallIdForTest(value: String?) {
+        boundCallId = value
+    }
+
+    companion object {
+        /**
+         * Owner-lookup budget (R45). Matches the telecom `addCall` writer-hold
+         * ceiling; a timeout here means "writer busy", not "no owner" — bind
+         * fail-opens rather than tearing down the ring UI.
+         */
+        private const val BIND_TIMEOUT_MS = 2_000L
     }
 }
