@@ -98,7 +98,9 @@ Future<void> main() async {
     defaultTimeoutSeconds: 45,
     connectionTimeoutSeconds: 120,
     maxConcurrentRinging: 3,
-    telecomIntegration: false,       // Phase-4 feature — keep false
+    telecomIntegration: false,       // opt-in: register calls with system Telecom
+                                     // (audio routing, BT/watch answer; or per-call
+                                     // via IncomingCall.useTelecom)
     manageOngoingCall: true,
     foregroundBehavior: ForegroundBehavior.headsUp,
     notificationIdBase: 424200,
@@ -126,7 +128,7 @@ void _onCallEvent(CallEvent event) {
     case CallEnded(:final reason):      // live call ended (local/remote/failed)
     case MissedCallTapped():            // user tapped the missed-call notification
     case CallRinging():    // ringing started (live-only; never replayed)
-    case AudioRouteChanged():           // telecom module only (Phase 4)
+    case AudioRouteChanged():           // telecom calls only (telecomIntegration/useTelecom)
   }
 }
 ```
@@ -405,11 +407,19 @@ the critical path — see **[FCM.md](FCM.md)**) and **headless background event 
 (`setBackgroundEventHandler` runs for a dead app, so a decline-while-dead invokes your Dart handler
 immediately instead of waiting for the next launch).
 
+**Telecom integration is available and device-verified** (API 26–36, including cold-process
+starts): set `telecomIntegration: true` (or per-call `IncomingCall.useTelecom`) to register calls
+with system Telecom. You gain real audio routing (`setAudioRoute` + `AudioRouteChanged` events),
+Bluetooth/watch/wired-headset answer buttons feeding the normal `CallAccepted` flow, and ringing
+that survives blocked notifications (the OS exempts CallStyle while Telecom reports a call). Any
+registration/`addCall` failure falls back to normal non-telecom behavior automatically — ringing
+is never blocked — and shows up in `diagnose()`. Without telecom (off, or fallen back),
+`setAudioRoute` honestly returns `wrongState` and `AudioRouteChanged` never fires.
+
 **Not yet — don't design around these until their phase lands:**
 
 | Feature | Status |
 |---|---|
-| Telecom integration (system audio routing, `setAudioRoute`, Bluetooth/watch answer) | In progress, **not yet device-verified**. Keep `telecomIntegration: false`; with it off, `setAudioRoute` returns `wrongState`. |
 | Remote telemetry upload | Planned (final pre-release scope). The `telemetry` config field is accepted but inert — nothing leaves the device. |
 | iOS | Never (by design). |
 

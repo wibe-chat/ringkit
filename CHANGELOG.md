@@ -13,8 +13,20 @@ Killed-state fast paths (device-verified, on `main`):
   your server immediately instead of waiting for the next launch.
 - `firebase_messaging` example wiring, `docs/FCM.md`, and the `AudioRouteChanged` event surface.
 
-_In progress (not yet device-verified — do not enable): the telecom module (system audio routing,
-Bluetooth/watch answer)._
+Telecom module (device-verified on API 26–36, including cold-process starts):
+
+- **System Telecom integration**, opt-in via `telecomIntegration: true` or per-call
+  `IncomingCall.useTelecom`: calls register with Telecom before any UI posts, so the CallStyle
+  notification rings **even when the user has blocked notifications**.
+- **Real audio routing:** `setAudioRoute(...)` drives the system endpoint change (honest
+  `wrongState` when no telecom call is active) and `AudioRouteChanged` events fire on every
+  route move (earpiece/speaker/Bluetooth/wired).
+- **Hardware answer:** Bluetooth/watch/wired-headset answer buttons feed the exact same accept
+  flow as a notification tap — one code path, one `CallAccepted` event.
+- **Automatic fallback:** any Telecom registration/`addCall` failure silently falls back to
+  normal non-telecom ringing (ringing is never blocked) and is reported via `diagnose()`.
+- **Android 16 promoted ("Live Updates") ongoing notification:** the in-call notification
+  requests promotion + shows a status-bar chip on API 36; below 36 nothing changes.
 
 ## 0.2.0 — 2026-07-05
 

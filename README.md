@@ -133,7 +133,7 @@ in-app answer UIs — the identical native path as a notification tap.
 | Native FCM fast path (Dart off the ring path) | ✅ Mode 2 | ❌ |
 | Failure reporting | ✅ typed `shown/degraded/failed/expired` | ❌ `void` |
 | Ring survives process death mid-call | ✅ FGS owns audio | ⚠️ dies with the isolate |
-| Hardware (Bluetooth/watch) answer | 🔜 telecom module | ❌ dropped silently |
+| Hardware (Bluetooth/watch) answer | ✅ telecom module routes it into the standard accept flow | ❌ dropped silently |
 | Silent no-op when process is alive | ✅ no singleton in the action path | ⚠️ known failure |
 | API | typed Pigeon models, sealed events | 40-field maps, `handle` often null |
 
@@ -150,7 +150,9 @@ in-app answer UIs — the identical native path as a notification tap.
 | Permissions / onboarding helpers + `diagnose()` + OEM deep links | ✅ |
 | Headless background handler (decline-while-dead → your Dart fn) | ✅ device-verified |
 | Mode 2 native FCM fast path (< 300 ms killed ring) | ✅ device-verified |
-| Telecom (system audio routing, Bluetooth/watch answer) | 🔜 in progress (not yet device-verified — keep `telecomIntegration: false`) |
+| Telecom opt-in (`telecomIntegration` / per-call `useTelecom`): system call registration, audio routing + `AudioRouteChanged`, rings even with notifications blocked | ✅ device-verified (API 26–36 incl. cold-process starts; automatic fallback to non-telecom on any failure) |
+| Bluetooth/watch/wired-headset answer buttons | ✅ wired through the telecom module into the standard accept flow (unit-tested; physical-Bluetooth device pass pending) |
+| Android 16 promoted (“Live Updates”) ongoing notification | ✅ promotion requested + status-bar chip on API 36 (OS treatment ships with A16 production builds) |
 | Fleet telemetry upload | 🔜 final pre-release scope (inert today) |
 
 **Quality bar:** 1000+ generated Robolectric tests (every state-machine transition is its own test

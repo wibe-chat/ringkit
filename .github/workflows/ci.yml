@@ -203,7 +203,12 @@ jobs:
             # when it finishes (verified on-device), which would strand any
             # adb-driven step that runs after it.
             tools/killed_state_harness.sh
+            # Telecom on/off parity (§14.1(8)): same harness with every ring as a
+            # real Telecom addCall (per-call useTelecom).
+            RINGKIT_TELECOM=1 tools/killed_state_harness.sh
             cd example && flutter test integration_test/ring_flow_test.dart -d "$(adb devices | awk 'NR==2{print $1}')"
+            # Telecom-ON integration leg (same suite, telecomIntegration: true).
+            flutter test integration_test/ring_flow_test.dart --dart-define=RINGKIT_TELECOM=true -d "$(adb devices | awk 'NR==2{print $1}')"
       - name: upload logcat on failure
         if: failure()
         # timeout guard: with a dead emulator this hung 45 min on the first run.
