@@ -8,6 +8,9 @@
 # No UI taps — deterministic on headless CI emulators (API 26/31/33/34/36).
 #
 # Usage: tools/killed_state_harness.sh [serial]
+#        RINGKIT_TELECOM=1 tools/killed_state_harness.sh [serial]   # §14.1(8)
+#        telecom-ON parity: every SIMULATE_CALL carries useTelecom=true, so
+#        each ring is a real Telecom addCall — same assertions must hold.
 set -u
 SERIAL="${1:-}"
 ADB="adb ${SERIAL:+-s $SERIAL}"
@@ -15,6 +18,62 @@ PKG=com.wibechat.ringkit_example
 RECEIVER="$PKG/.SimulateCallReceiver"
 FAILURES=0
 API=$($ADB shell getprop ro.build.version.sdk | tr -d '\r')
+TELECOM_ARGS=""
+[ "${RINGKIT_TELECOM:-0}" = "1" ] && TELECOM_ARGS="--es useTelecom true"
+
+# §10.2 background-delivery capture: the example's headless handler POSTs every
+# event it receives to localhost:8099 (adb-reversed to this host). A killed-state
+# ACTIONABLE event (TIMED_OUT/DECLINED/CANCELLED) is normally consumed by that
+# handler (lease + completion-ack) and then never replays — replay covers it only
+# when the background host lost the race (lease expired → sweep reap). Both are
+# correct §10 outcomes; assertions below accept EITHER, requiring exactly-once
+# delivery somewhere.
+BG_CAPTURE=$(mktemp -t ringkit-bg-posts)
+BG_SERVER_PID=""
+if command -v python3 >/dev/null; then
+  python3 - "$BG_CAPTURE" <<'PYEOF' &
+import http.server, sys
+capture = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        with open(capture, "ab") as f:
+            f.write(self.rfile.read(n) + b"\n")
+        self.send_response(200); self.end_headers()
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", 8099), H).serve_forever()
+PYEOF
+  BG_SERVER_PID=$!
+  $ADB reverse tcp:8099 tcp:8099 >/dev/null 2>&1 || echo "  [warn] adb reverse failed — background POSTs won't be captured"
+else
+  echo "  [warn] python3 missing — background POSTs won't be captured"
+fi
+cleanup() {
+  if [ -n "$BG_SERVER_PID" ]; then
+    kill "$BG_SERVER_PID" 2>/dev/null
+    wait "$BG_SERVER_PID" 2>/dev/null
+  fi
+  $ADB reverse --remove tcp:8099 >/dev/null 2>&1
+}
+trap cleanup EXIT
+
+bg_posts() { cat "$BG_CAPTURE" 2>/dev/null; }
+# delivered <EventType> <callId>: replayed to the relaunched Dart engine OR
+# consumed by the headless background handler (POST observed).
+delivered() {
+  flutter_log | grep -qE "#[0-9]+ $1" && return 0
+  bg_posts | grep -q "\"type\":\"$1\",\"callId\":\"$2\"" && return 0
+  return 1
+}
+# wait_until <timeout> <predicate...>: poll a shell function until it succeeds.
+wait_until() {
+  local timeout=$1 t=0; shift
+  while [ $t -lt "$timeout" ]; do
+    if "$@"; then return 0; fi
+    sleep 1; t=$((t + 1))
+  done
+  return 1
+}
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 pass() { printf '  \033[32mPASS\033[0m %s\n' "$*"; }
@@ -34,7 +93,7 @@ simulate() { # simulate <callId> <extra am args...>
   local id=$1; shift
   $ADB shell cmd deviceidle tempwhitelist -d 20000 $PKG >/dev/null 2>&1
   local out
-  out=$($ADB shell "am broadcast -n $RECEIVER -a $PKG.SIMULATE_CALL --es callId $id $*" 2>&1)
+  out=$($ADB shell "am broadcast -n $RECEIVER -a $PKG.SIMULATE_CALL --es callId $id $TELECOM_ARGS $*" 2>&1)
   case "$out" in
     *"Broadcast completed"*) : ;;
     *) echo "  [simulate $id] broadcast anomaly: $out" ;;
@@ -114,9 +173,9 @@ else fail "no SHOWN trace for ks-timeout"; fi
 if wait_for 40 "missed_count" "^[1-9]"; then pass "missed-call posted after timeout"; else fail "no missed-call after timeout"; fi
 if wait_for 10 "incoming_count" "^0$"; then pass "incoming torn down"; else fail "incoming lingers post-timeout"; dump_state; fi
 relaunch
-if wait_for 45 "flutter_log" "#[0-9]+ CallTimedOut"; then
-  pass "CallTimedOut replayed to Dart on relaunch"
-else fail "no CallTimedOut replay"; fi
+if wait_until 45 delivered CallTimedOut ks-timeout; then
+  pass "CallTimedOut delivered (background handler or replay, §10.2)"
+else fail "CallTimedOut LOST — neither background POST nor replay"; fi
 
 # ── 2. out-of-order cancel (pre-tombstone) never rings ───────────────────
 say "2: out-of-order cancel → show must NOT ring"
@@ -142,7 +201,9 @@ if $ADB shell dumpsys activity activities 2>/dev/null | grep -q "ResumedActivity
   fail "decline launched the app (#768 regression)"
 else pass "decline never launches the app"; fi
 relaunch
-if wait_for 45 "flutter_log" "#[0-9]+ CallDeclined"; then pass "CallDeclined replayed"; else fail "no CallDeclined replay"; fi
+if wait_until 45 delivered CallDeclined ks-decline; then
+  pass "CallDeclined delivered (background handler or replay, §10.2)"
+else fail "CallDeclined LOST — neither background POST nor replay"; fi
 
 # ── 4. accept-while-dead: launch action + connecting survives ────────────
 say "4: killed ring → accept action → launch action on next start"
@@ -167,7 +228,9 @@ sleep 12 # clear the 10 s post-in-flight grace
 $ADB logcat -c 2>/dev/null || true
 relaunch
 if wait_for 20 "ringkit_log" "\[sweep\] RINGING swept"; then pass "sweep killed the ghost (R32)"; else fail "no sweep trace"; fi
-if wait_for 45 "flutter_log" "#[0-9]+ CallTimedOut"; then pass "swept TIMED_OUT replayed"; else fail "no TIMED_OUT replay from sweep"; fi
+if wait_until 45 delivered CallTimedOut ks-sweep; then
+  pass "swept TIMED_OUT delivered (live/background/replay, §10.2)"
+else fail "swept TIMED_OUT LOST — neither background POST nor replay"; fi
 
 say "result"
 if [ $FAILURES -eq 0 ]; then

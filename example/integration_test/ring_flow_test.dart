@@ -44,7 +44,10 @@ void main() {
         defaultTimeoutSeconds: 45,
         connectionTimeoutSeconds: 120,
         maxConcurrentRinging: 3,
-        telecomIntegration: false,
+        // Telecom on/off parity: the SAME suite runs both ways —
+        // `flutter test integration_test --dart-define=RINGKIT_TELECOM=true`
+        // turns every show into a real Telecom addCall (addCall-before-post).
+        telecomIntegration: const bool.fromEnvironment('RINGKIT_TELECOM'),
         manageOngoingCall: true,
         foregroundBehavior: ForegroundBehavior.headsUp,
         notificationIdBase: 424200,
