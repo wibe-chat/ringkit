@@ -14,6 +14,8 @@
     <string name="ringkit_action_call_back">Call back</string>
     <string name="ringkit_connecting">Connecting…</string>
     <string name="ringkit_calling">Calling…</string>
+    <!-- §8.3 A16 promoted-ongoing status-bar chip (deliberately short). -->
+    <string name="ringkit_chip_call">Call</string>
 
     <!-- §8.10 missed-call copy per cancel reason. -->
     <string name="ringkit_missed_call">Missed call</string>

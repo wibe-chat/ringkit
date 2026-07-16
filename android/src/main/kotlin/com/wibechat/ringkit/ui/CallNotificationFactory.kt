@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.media.AudioAttributes
 import android.media.RingtoneManager
+import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.graphics.drawable.IconCompat
@@ -328,6 +329,16 @@ class CallNotificationFactory(
                 .setContentTitle(record.info.name)
                 .setStyle(style)
         record.options.colors.accentArgb?.let { builder.setColor(it) }
+        // §8.3 A16 promoted/live-update ongoing (36+): opt-in request + status-bar
+        // chip. Best-effort — the user can revoke POST_PROMOTED_NOTIFICATIONS via
+        // the Live Updates toggle, so promotion is never load-bearing. NEVER
+        // combined with setColorized (Live-Updates eligibility; never-regress).
+        // Only this CallStyle build requests it: the non-CallStyle fallback below
+        // lacks a promotable style, so a request there would be a silent lie.
+        if (Build.VERSION.SDK_INT >= 36) {
+            builder.setRequestPromotedOngoing(true)
+            builder.setShortCriticalText(context.getString(R.string.ringkit_chip_call))
+        }
         applyOngoingStateContent(builder, record)
         return builder.build()
     }

@@ -314,6 +314,28 @@ class NotificationFactoryTest {
         assertEquals("Connecting…", notification.extras.getString(Notification.EXTRA_TEXT))
     }
 
+    // ── A16 promoted ongoing (§8.3; M5.6) ────────────────────────────────
+    // Robolectric caps at SDK 35 (4.15.1: "API level 36 is not available"), so
+    // the unit suite proves the ≤35 side of the version gate + the colorized
+    // guardrail; the API-36 promoted render (request + chip, dumpsys-visible)
+    // is the emulator leg — evidence/m5/promoted-ongoing.md.
+
+    @Test
+    @Config(sdk = [35])
+    fun promoted_ongoing_below_36_is_not_requested_and_never_colorized() {
+        factory().ensureChannels()
+        val notification = factory().buildOngoing(record(state = CoreCallState.ACTIVE, connectedAtWallMs = 1L))
+        assertFalse(
+            "≤35 keeps the pre-A16 surface — no promotion request",
+            androidx.core.app.NotificationCompat.isRequestPromotedOngoing(notification),
+        )
+        assertNull(androidx.core.app.NotificationCompat.getShortCriticalText(notification))
+        // Never-regress guardrail (§8.3/D2): the ongoing build must never carry
+        // colorized — promotion and colorized are mutually exclusive on 36, and
+        // the guarantee is that this surface NEVER sets it at any level.
+        assertFalse(notification.extras.getBoolean(Notification.EXTRA_COLORIZED, false))
+    }
+
     // ── small icon (§8.2) ────────────────────────────────────────────────
 
     @Test
