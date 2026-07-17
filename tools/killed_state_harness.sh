@@ -18,6 +18,12 @@ PKG=com.wibechat.ringkit_example
 RECEIVER="$PKG/.SimulateCallReceiver"
 FAILURES=0
 API=$($ADB shell getprop ro.build.version.sdk | tr -d '\r')
+# Unique per-run callId prefix (R34/R41): terminal tombstones live ~10 min and
+# gate showIncomingCall as FCM re-delivery protection — a rerun (or the telecom
+# parity leg right after the OFF leg) reusing fixed ids would be silently and
+# CORRECTLY refused by the plugin. Diagnosed 2026-07-17 (13-assert wipeout that
+# healed after 10 min); fixed ids ARE the bug, not the plugin.
+RUN="ks$(date +%s)"
 TELECOM_ARGS=""
 [ "${RINGKIT_TELECOM:-0}" = "1" ] && TELECOM_ARGS="--es useTelecom true"
 
@@ -164,25 +170,25 @@ fi
 # ── 1. killed-state ring + native timeout + replay ──────────────────────
 say "1: killed ring → timeout → missed → replay"
 fresh
-if arm_ring ks-timeout "--es name KsTimeout --es timeoutSeconds 12"; then
+if arm_ring ${RUN}-timeout "--es name KsTimeout --es timeoutSeconds 12"; then
   pass "incoming notification posted"
 else fail "no incoming notification"; fi
-if wait_for 5 "ringkit_log" "\[show\] outcome=SHOWN.*call=ks-timeout"; then
+if wait_for 5 "ringkit_log" "\[show\] outcome=SHOWN.*call=${RUN}-timeout"; then
   pass "cold process rang (SHOWN traced)"
-else fail "no SHOWN trace for ks-timeout"; fi
+else fail "no SHOWN trace for ${RUN}-timeout"; fi
 if wait_for 40 "missed_count" "^[1-9]"; then pass "missed-call posted after timeout"; else fail "no missed-call after timeout"; fi
 if wait_for 10 "incoming_count" "^0$"; then pass "incoming torn down"; else fail "incoming lingers post-timeout"; dump_state; fi
 relaunch
-if wait_until 45 delivered CallTimedOut ks-timeout; then
+if wait_until 45 delivered CallTimedOut ${RUN}-timeout; then
   pass "CallTimedOut delivered (background handler or replay, §10.2)"
 else fail "CallTimedOut LOST — neither background POST nor replay"; fi
 
 # ── 2. out-of-order cancel (pre-tombstone) never rings ───────────────────
 say "2: out-of-order cancel → show must NOT ring"
 fresh
-sim_cancel ks-ooo callerCancelled
+sim_cancel ${RUN}-ooo callerCancelled
 sleep 2
-simulate ks-ooo "--es name Ghost --es timeoutSeconds 20"
+simulate ${RUN}-ooo "--es name Ghost --es timeoutSeconds 20"
 if wait_for 10 "ringkit_log" "never re-rings"; then pass "pre-tombstone rejected the show (R34/R41)"; else fail "no never-re-rings trace"; fi
 sleep 1
 if [ "$(incoming_count)" = "0" ]; then pass "zero incoming notifications"; else fail "ghost call rang"; dump_state; fi
@@ -190,9 +196,9 @@ if [ "$(incoming_count)" = "0" ]; then pass "zero incoming notifications"; else 
 # ── 3. decline-while-dead: no missed, no app launch, replay ─────────────
 say "3: killed ring → decline action → replay"
 fresh
-arm_ring ks-decline "--es name KsDecline --es timeoutSeconds 45" || fail "ring never posted (decline scenario)"
+arm_ring ${RUN}-decline "--es name KsDecline --es timeoutSeconds 45" || fail "ring never posted (decline scenario)"
 MISSED_BEFORE=$(missed_count)
-sim_action ks-decline decline
+sim_action ${RUN}-decline decline
 if wait_for 10 "ringkit_log" "\[receiver\]|DECLINED|reject" || true; then :; fi
 sleep 3
 if wait_for 10 "incoming_count" "^0$"; then pass "incoming torn down on decline"; else fail "incoming lingers post-decline"; dump_state; fi
@@ -201,15 +207,15 @@ if $ADB shell dumpsys activity activities 2>/dev/null | grep -q "ResumedActivity
   fail "decline launched the app (#768 regression)"
 else pass "decline never launches the app"; fi
 relaunch
-if wait_until 45 delivered CallDeclined ks-decline; then
+if wait_until 45 delivered CallDeclined ${RUN}-decline; then
   pass "CallDeclined delivered (background handler or replay, §10.2)"
 else fail "CallDeclined LOST — neither background POST nor replay"; fi
 
 # ── 4. accept-while-dead: launch action + connecting survives ────────────
 say "4: killed ring → accept action → launch action on next start"
 fresh
-arm_ring ks-accept "--es name KsAccept --es timeoutSeconds 45" || fail "ring never posted (accept scenario)"
-sim_action ks-accept accept
+arm_ring ${RUN}-accept "--es name KsAccept --es timeoutSeconds 45" || fail "ring never posted (accept scenario)"
+sim_action ${RUN}-accept accept
 sleep 3
 if $ADB shell dumpsys notification 2>/dev/null | grep -qE "NotificationRecord.*$PKG.*ringkit_ongoing"; then
   pass "Connecting… surface up (remove-vs-detach)"
@@ -217,18 +223,18 @@ else fail "no connecting surface after accept"; fi
 relaunch
 if wait_for 45 "flutter_log" "launch action: accepted"; then pass "launch action consumed on next start (R44)"; else fail "no launch action"; fi
 if wait_for 45 "flutter_log" "#[0-9]+ CallAccepted"; then pass "CallAccepted replayed"; else fail "no CallAccepted replay"; fi
-sim_action ks-accept hangup; sleep 2 # cleanup
+sim_action ${RUN}-accept hangup; sleep 2 # cleanup
 
 # ── 5. reconciliation sweep: force-stop mid-ring → swept on relaunch ─────
 say "5: force-stop mid-ring → sweep TIMED_OUT, no ghost"
 fresh
-arm_ring ks-sweep "--es name KsSweep --es timeoutSeconds 40" || fail "ring never posted (sweep scenario)"
+arm_ring ${RUN}-sweep "--es name KsSweep --es timeoutSeconds 40" || fail "ring never posted (sweep scenario)"
 $ADB shell am force-stop $PKG
 sleep 12 # clear the 10 s post-in-flight grace
 $ADB logcat -c 2>/dev/null || true
 relaunch
 if wait_for 20 "ringkit_log" "\[sweep\] RINGING swept"; then pass "sweep killed the ghost (R32)"; else fail "no sweep trace"; fi
-if wait_until 45 delivered CallTimedOut ks-sweep; then
+if wait_until 45 delivered CallTimedOut ${RUN}-sweep; then
   pass "swept TIMED_OUT delivered (live/background/replay, §10.2)"
 else fail "swept TIMED_OUT LOST — neither background POST nor replay"; fi
 
