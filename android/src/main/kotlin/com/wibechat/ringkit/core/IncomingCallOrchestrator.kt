@@ -222,6 +222,14 @@ class IncomingCallOrchestrator(
             json.put("degradations", org.json.JSONArray(outcome.degradations.map { it.name }))
             core.store.writeLastShowResult(json.toString())
         }
+        // §11.5 heartbeat tallies (telemetry seam; cheap enqueue, never throws).
+        runCatching {
+            core.showOutcomeSink?.invoke(
+                outcome.result.outcome.name,
+                outcome.failReason?.name,
+                outcome.degradations.map { it.name }.toSet(),
+            )
+        }
     }
 
     /** §5.2 eviction effects: victim teardown + missed-call from its snapshot. */

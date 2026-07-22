@@ -52,6 +52,9 @@ internal class RingKitHostApiImpl(
             // the first degraded show ever needs it).
             CallNotificationFactory(context, applied, core.time, core.ringLog, core.repository::notificationIdFor)
                 .ensureChannels()
+            // §11.5: telemetry follows config transitions (enable ⇒ activate,
+            // disable ⇒ cancel workers + detach seams, change ⇒ re-apply).
+            runCatching { com.wibechat.ringkit.telemetry.Telemetry.onConfigChanged(core) }
             Unit
         }
 

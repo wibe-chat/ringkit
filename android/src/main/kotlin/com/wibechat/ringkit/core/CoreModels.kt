@@ -194,6 +194,24 @@ data class CoreEvent(
     val audioRoute: CoreAudioRoute? = null,
 )
 
+/**
+ * §11.5 telemetry module config. null on [CoreConfig.telemetry] ⇒ the
+ * telemetry/ module is fully inert (rule 14). The apiKey is persisted with the
+ * config (noBackupFilesDir) and is never logged at any level (§11.4).
+ */
+data class CoreTelemetryConfig(
+    val endpoint: String,
+    val apiKey: String,
+    val deviceLabel: String,
+    val uploadLevel: CoreLogLevel = CoreLogLevel.INFO,
+    val dailyUploadBudgetKb: Int = 200,
+) {
+    /** §11.4: the apiKey never reaches ANY log — incl. config-clamp traces. */
+    override fun toString(): String =
+        "CoreTelemetryConfig(endpoint=$endpoint, apiKey=${RingLog.REDACTED}, " +
+            "deviceLabel=$deviceLabel, uploadLevel=$uploadLevel, dailyUploadBudgetKb=$dailyUploadBudgetKb)"
+}
+
 /** §8.10 cold-install defaults; every field clamps invalid input (never throws). */
 data class CoreConfig(
     val incomingChannelName: String = "Incoming calls",
@@ -211,6 +229,7 @@ data class CoreConfig(
     val notificationIdBase: Int = 424200,
     val logLevel: CoreLogLevel = CoreLogLevel.ERROR,
     val channelSuffix: String = "",
+    val telemetry: CoreTelemetryConfig? = null,
 ) {
     companion object {
         const val MIN_TIMEOUT_SECONDS = 10

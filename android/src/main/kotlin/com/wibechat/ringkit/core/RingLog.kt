@@ -47,8 +47,9 @@ class RingLog internal constructor(
         const val QUEUE_CAPACITY = 1024
         const val REDACTED = "«redacted»"
 
-        private val PII_KEYS = setOf("name", "handle", "avatarUrl", "avatarHeaders", "callerName", "calleeName")
-        private const val ALWAYS_REDACTED_KEY = "apiKey"
+        /** §11.4 PII keys — shared with the telemetry/ upload-time redaction filter. */
+        internal val PII_KEYS = setOf("name", "handle", "avatarUrl", "avatarHeaders", "callerName", "calleeName")
+        internal const val ALWAYS_REDACTED_KEY = "apiKey"
 
         fun open(baseDir: File, time: TimeSource): RingLog = RingLog(File(baseDir, "logs"), time)
 
@@ -81,6 +82,16 @@ class RingLog internal constructor(
     /** Config logLevel (§11.4): gates the logcat tee + PII redaction, not capture. */
     @Volatile
     var level: CoreLogLevel = CoreLogLevel.ERROR
+
+    /**
+     * §11.5 shipping seam: fired on the writer thread AFTER a NEW incident
+     * snapshot file landed (i.e. the once-per-fingerprint-per-day dedup admitted
+     * it) and meta persisted. Deduped repeat occurrences never fire — they are
+     * local counters only, reported via the heartbeat. Set by the telemetry/
+     * module when enabled; null = inert. MUST be cheap (hop off this thread).
+     */
+    @Volatile
+    var onIncidentSnapshot: ((fingerprint: String) -> Unit)? = null
 
     private val incidentsDir = File(dir, "incidents")
     private val metaFile = File(dir, "meta.json")
@@ -149,6 +160,27 @@ class RingLog internal constructor(
     }
 
     fun droppedLogs(): Int = dropped.get()
+
+    /**
+     * §11.5 heartbeat inputs (lenient meta reads; safe from any thread — meta
+     * writes are atomic tmp+rename). Counts are cumulative since install.
+     */
+    fun incidentCounters(): Map<String, Int> {
+        val per = readMeta().optJSONObject("incidents") ?: return emptyMap()
+        val out = LinkedHashMap<String, Int>()
+        per.keys().forEach { fp -> out[fp] = per.optJSONObject(fp)?.optInt("count", 0) ?: 0 }
+        return out
+    }
+
+    /** Persisted dropped counter (this process's live counter may lag/lead it). */
+    fun persistedDroppedLogs(): Int = readMeta().optInt("droppedLogs", 0)
+
+    /** §11.5 uploader inputs: incident snapshot files (`<fingerprint>-<wallMs>.jsonl`). */
+    fun incidentFiles(): List<File> =
+        (incidentsDir.listFiles() ?: emptyArray()).filter { it.name.endsWith(".jsonl") }.sortedBy { it.name }
+
+    /** §11.5 pull-on-demand input: the full rotating buffer, oldest first. */
+    fun bufferFilesOldestFirst(): List<File> = (rotatedFiles() + currentFile).filter { it.exists() }
 
     /** Stable §11.5 fingerprint: hash{incident type, codepoint, degradation set}. */
     fun fingerprint(type: IncidentType, codepoint: String, degradations: Set<String>): String {
@@ -303,7 +335,8 @@ class RingLog internal constructor(
 
         // Once per fingerprint per day (§11.5 dedup — capture side).
         val lastSnapshot = entry.optLong("lastSnapshotWall", 0L)
-        if (nowWall - lastSnapshot >= SNAPSHOT_DEDUP_MS) {
+        val snapshotted = nowWall - lastSnapshot >= SNAPSHOT_DEDUP_MS
+        if (snapshotted) {
             entry.put("lastSnapshotWall", nowWall)
             val out = File(incidentsDir, "${incident.fingerprint}-$nowWall.jsonl")
             FileOutputStream(out).use { fos ->
@@ -318,6 +351,11 @@ class RingLog internal constructor(
         perFingerprint.put(incident.fingerprint, entry)
         meta.put("incidents", perFingerprint)
         writeMeta(meta)
+        // §11.5 shipping seam — after file + meta are durable; listener errors
+        // must never take the writer down.
+        if (snapshotted) {
+            runCatching { onIncidentSnapshot?.invoke(incident.fingerprint) }
+        }
     }
 
     /** Lines from the two newest buffer files with wall ≥ [sinceWallMs] (lenient: torn lines skipped). */

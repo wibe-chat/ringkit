@@ -50,6 +50,15 @@ object RingKitCore {
         var liveSink: ((events: List<CoreEvent>, suppress: CoreSuppressReason?) -> Boolean)? = null
 
         /**
+         * §11.5 heartbeat tallies: every showOnWriter outcome funnels through
+         * this seam (shows / fail reasons / degradation sets). Set by the
+         * telemetry/ module when enabled; null = inert. Called on the writer —
+         * implementations MUST be cheap (hop to their own executor).
+         */
+        @Volatile
+        var showOutcomeSink: ((outcome: String, failReason: String?, degradations: Set<String>) -> Unit)? = null
+
+        /**
          * Sweep probes (§8.10). The notification-presence check applies only to
          * calls that actually posted a surface, with a 10 s post-in-flight grace
          * (the FGS posts asynchronously moments after show marks the flag).
@@ -115,6 +124,11 @@ object RingKitCore {
             writer.onUncaught = { t ->
                 ringLog.incident(RingLog.IncidentType.BOUNDARY_EXCEPTION, "WriterExecutor.post", null, throwable = t)
             }
+            // §11.5: telemetry self-activates in EVERY process (a killed-state
+            // incident must ship without Flutter ever attaching). Null config ⇒
+            // activate() returns before touching WorkManager (rule 14 inert);
+            // telemetry failures must never break core construction.
+            runCatching { com.wibechat.ringkit.telemetry.Telemetry.activate(this) }
         }
     }
 

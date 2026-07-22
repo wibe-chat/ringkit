@@ -308,6 +308,37 @@ internal object CoreJson {
             .put("notificationIdBase", v.notificationIdBase)
             .put("logLevel", v.logLevel.name)
             .put("channelSuffix", v.channelSuffix)
+            .apply {
+                v.telemetry?.let { t ->
+                    put(
+                        "telemetry",
+                        JSONObject()
+                            .put("endpoint", t.endpoint)
+                            .put("apiKey", t.apiKey)
+                            .put("deviceLabel", t.deviceLabel)
+                            .put("uploadLevel", t.uploadLevel.name)
+                            .put("dailyUploadBudgetKb", t.dailyUploadBudgetKb),
+                    )
+                }
+            }
+
+    /** §11.5: absent/invalid telemetry block ⇒ null ⇒ module inert (rule 14). */
+    private fun telemetryConfig(o: JSONObject?): CoreTelemetryConfig? {
+        if (o == null) return null
+        val endpoint = o.optString("endpoint", "")
+        val apiKey = o.optString("apiKey", "")
+        if (endpoint.isBlank() || apiKey.isBlank()) return null
+        val d = CoreTelemetryConfig(endpoint = endpoint, apiKey = apiKey, deviceLabel = "")
+        return CoreTelemetryConfig(
+            endpoint = endpoint,
+            apiKey = apiKey,
+            deviceLabel = o.optString("deviceLabel", ""),
+            uploadLevel = o.optEnum("uploadLevel", d.uploadLevel),
+            dailyUploadBudgetKb =
+                o.optInt("dailyUploadBudgetKb", d.dailyUploadBudgetKb)
+                    .let { if (it <= 0) d.dailyUploadBudgetKb else it },
+        )
+    }
 
     fun config(o: JSONObject?): CoreConfig {
         if (o == null) return CoreConfig()
@@ -336,6 +367,7 @@ internal object CoreJson {
             notificationIdBase = o.optInt("notificationIdBase", d.notificationIdBase),
             logLevel = o.optEnum("logLevel", d.logLevel),
             channelSuffix = o.optString("channelSuffix", d.channelSuffix),
+            telemetry = telemetryConfig(o.optJSONObject("telemetry")),
         )
     }
 

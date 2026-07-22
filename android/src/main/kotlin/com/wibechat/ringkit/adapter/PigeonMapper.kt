@@ -14,6 +14,7 @@ import com.wibechat.ringkit.core.CoreEvent
 import com.wibechat.ringkit.core.CoreEventType
 import com.wibechat.ringkit.core.CoreFailReason
 import com.wibechat.ringkit.core.CoreSuppressReason
+import com.wibechat.ringkit.core.CoreTelemetryConfig
 import com.wibechat.ringkit.core.IncomingCallOrchestrator
 import com.wibechat.ringkit.core.CoreForegroundBehavior
 import com.wibechat.ringkit.core.CoreIncomingCall
@@ -113,7 +114,16 @@ internal object PigeonMapper {
             notificationIdBase = config.notificationIdBase.toInt(),
             logLevel = CoreLogLevel.valueOf(config.logLevel.name),
             channelSuffix = config.channelSuffix,
-            // config.telemetry is SCOPE-2; the telemetry/ module reads it there.
+            telemetry =
+                config.telemetry?.let {
+                    CoreTelemetryConfig(
+                        endpoint = it.endpoint,
+                        apiKey = it.apiKey,
+                        deviceLabel = it.deviceLabel,
+                        uploadLevel = CoreLogLevel.valueOf(it.uploadLevel.name),
+                        dailyUploadBudgetKb = it.dailyUploadBudgetKb.toInt(),
+                    )
+                },
         )
 
     // ── core → Pigeon ────────────────────────────────────────────────────
