@@ -66,6 +66,21 @@ class FakeHostApi extends wire.RingKitHostApi {
   ) async {
     registeredHandles = (dispatcherHandle, handlerHandle);
   }
+
+  bool reportIssueResult = true;
+  wire.TelemetryStatus? status;
+
+  @override
+  Future<bool> reportIssue() async {
+    calls.add('reportIssue');
+    return reportIssueResult;
+  }
+
+  @override
+  Future<wire.TelemetryStatus?> telemetryStatus() async {
+    calls.add('telemetryStatus');
+    return status;
+  }
 }
 
 wire.CallEventRecord record(
@@ -332,6 +347,43 @@ void main() {
       expect(fake.registeredHandles!.$1, isNot(0));
       expect(fake.registeredHandles!.$2, isNot(0));
       expect(fake.registeredHandles!.$1, isNot(fake.registeredHandles!.$2));
+    });
+  });
+
+  group('telemetry surface (§11.5)', () {
+    test('reportIssue forwards to native and returns its result', () async {
+      expect(await RingKit.reportIssue(), isTrue);
+      expect(fake.calls, contains('reportIssue'));
+
+      fake.reportIssueResult = false; // telemetry disabled natively
+      expect(await RingKit.reportIssue(), isFalse);
+    });
+
+    test('telemetryStatus passes the null (disabled) case through', () async {
+      fake.status = null;
+      expect(await RingKit.telemetryStatus(), isNull);
+      expect(fake.calls, contains('telemetryStatus'));
+    });
+
+    test('telemetryStatus surfaces the current knobs', () async {
+      fake.status = wire.TelemetryStatus(
+        deviceLabel: 'bench-A',
+        endpoint: 'https://fleet.example',
+        registered: true,
+        captureLevel: wire.RingKitLogLevel.verbose,
+        pullPending: true,
+        sampled: false,
+        budgetKb: 200,
+        killed: false,
+        bytesUploadedToday: 4096,
+      );
+      final status = await RingKit.telemetryStatus();
+      expect(status, isNotNull);
+      expect(status!.deviceLabel, 'bench-A');
+      expect(status.captureLevel, wire.RingKitLogLevel.verbose);
+      expect(status.pullPending, isTrue);
+      expect(status.budgetKb, 200);
+      expect(status.bytesUploadedToday, 4096);
     });
   });
 

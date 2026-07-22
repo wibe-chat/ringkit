@@ -232,4 +232,30 @@ class TelemetryGatewayTest {
         assertTrue(Telemetry.userReportNow())
         assertTrue(awaitTrue { "userReport" in scheduler.calls })
     }
+
+    @Test
+    fun `status is null when disabled and reflects config plus knobs when enabled`() {
+        val core = RingKitCore.get(context) // inert boot
+        assertNull(Telemetry.status(), "no status while inert")
+
+        core.repository.updateConfig(CoreConfig(telemetry = telemetryConfig))
+        Telemetry.onConfigChanged(core)
+        val session = Telemetry.session!!
+        // Server flagged a pull + verbose + a tighter budget; token issued.
+        session.state.deviceToken = "tok-1"
+        session.state.applyKnobs(CoreLogLevel.VERBOSE, 50, sampled = true, killed = false, pullPending = true, deviceToken = null)
+        core.ringLog.level = CoreLogLevel.VERBOSE
+        session.state.addBytes(TelemetryEngine.dayUtc(core.time.wallMs()), 2048)
+
+        val status = Telemetry.status()!!
+        assertEquals("bench-A", status.deviceLabel)
+        assertEquals("https://fleet.example", status.endpoint)
+        assertTrue(status.registered)
+        assertEquals(CoreLogLevel.VERBOSE, status.captureLevel)
+        assertTrue(status.pullPending)
+        assertTrue(status.sampled)
+        assertEquals(50, status.budgetKb, "server budget override wins over config")
+        assertFalse(status.killed)
+        assertEquals(2048, status.bytesUploadedToday)
+    }
 }
