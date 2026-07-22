@@ -56,6 +56,30 @@ Incident uploads are idempotent per (install_id, fingerprint, device_ts): a retr
 acknowledged (`duplicate: true`) without a second stored payload. Pulls are exempt from the
 budget (they are operator-initiated) and clear the `pull_buffer` flag when the last part lands.
 
+## Client behavior (what the plugin's uploader actually does)
+
+- **Registration** happens lazily before the first upload of any kind; the token persists on
+  the device (never backed up, install-fenced — a cloned image re-registers cleanly).
+- **Incidents** ship once per fingerprint per device per UTC day, via an expedited WorkManager
+  one-shot. Repeat occurrences stay local and reach the server as heartbeat fingerprint deltas.
+  A snapshot that could not ship (offline, budget) is retried by the daily heartbeat's
+  reconciliation sweep — nothing is lost, arrival is just delayed.
+- **Heartbeats** run in one daily periodic WorkManager slot. Missed days ship as separate
+  catch-up day-buckets (up to 7 kept) oldest-first; the newest beat carries the fingerprint
+  deltas and `dropped_logs`. Same-day re-beats replace that day's counters server-side.
+- **Pulls** upload the entire on-device buffer, chunked into parts; Wi-Fi is preferred for a
+  couple of backoff rounds, then the pull ships on metered anyway. `user_report` ("Report
+  issue now") ships the past ~30 minutes under the fixed fingerprint `user-report`; flag a
+  pull when you need the whole buffer.
+- **Knobs apply atomically on every response**: `log_level` switches the device's capture
+  level immediately (no reinstall), `budget_kb` overrides the configured budget, `kill: true`
+  cancels all telemetry work and stops every data upload while local capture keeps running.
+  A killed device still sends one ~250 B `register` knob poll per day — that is the only way
+  `kill: false` can ever reach it.
+- **Privacy**: caller names/handles/avatar URLs are redacted in uploads unless the effective
+  level is `verbose` (server override, else the configured upload level); the apiKey and
+  device token never appear in any log or payload records at any level.
+
 ## Server side (summary)
 
 - Postgres tables: `devices` (identity + knobs + budget), `issues` (one row per unique failure
