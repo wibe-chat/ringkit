@@ -96,3 +96,92 @@ budget (they are operator-initiated) and clear the `pull_buffer` flag when the l
 Per device per day: one ~1 KB heartbeat + incidents only on failure (deduped, ≤ once per
 fingerprint per day, hard `budget_kb` cap). Ingress is free; retention is bounded. In practice
 a 50k-device fleet fits inside a single Supabase Pro plan.
+
+**Why tiered, not naive log shipping.** A naive "ship every device's rotating buffer" design at
+50k devices, ~5 MB/device/day, is ~250 GB/day (~7.5 TB/month) of ingest and storage — orders of
+magnitude past a hobby-tier bill, and 99.9% of it is healthy-path noise no one reads. The tiered
+protocol inverts that: **logs stay on the device; only signals ship.**
+
+| | Naive (ship everything) | Tiered (this design) |
+|---|---|---|
+| Steady-state upload / device / day | ~5 MB | ~1 KB heartbeat (+ incidents only on failure) |
+| 50k-device fleet / month | ~7.5 TB | ~1.5 GB + deduped incidents |
+| One bug hitting 10k devices | 10k log streams | 1 `issues` row + counters, ≤ 10k small payloads (once/device/day), most days 0 |
+| Full detail for a specific device | always paid for | pulled on demand (operator flags the install) |
+
+The full buffer is never gone — it is one `pull_buffer` flag away for any device that needs a
+deep look. That is the whole trade: pay bytes for **signal** continuously, pay bytes for **detail**
+only when a human asks.
+
+**Upgrade path (if full-fleet log shipping is ever wanted).** The wire contract is backend-agnostic
+— two JSON shapes over HTTP. To move off Supabase without touching a single client:
+- **Cloudflare Workers + R2** — cheapest at scale; the Worker validates the token, writes gzipped
+  JSONL to R2, keeps the metadata tables in D1/Postgres. Same request/response shapes.
+- **Loki / ClickHouse** — if you want full-text log *search* across the fleet rather than
+  pull-on-demand; point the ingest function at the store and keep the dedup/heartbeat tables for
+  the dashboard. Higher cost, much richer query.
+
+## Tester onboarding
+
+For community testers running a telemetry-enabled build:
+
+- **Enabling.** In the app's telemetry settings, enter the **endpoint** (the Supabase project URL),
+  the **fleet apiKey** (from whoever runs the backend — treat it like a password; it is stored only
+  on your device), and a **device label**. Tap Enable. The switch is off by default and the app
+  discloses what it collects before you turn it on.
+- **Device label conventions.** Use something that identifies the hardware and the person at a
+  glance in the dashboard: `ada-pixel8-a14`, `sam-miui-redmi12`, `qa-oneplus-lab3`. Manufacturer +
+  model + OS quirk beats a bare name — the whole point is filtering "didn't ring on a Xiaomi" by
+  label. Keep it stable across reinstalls so one device stays one story.
+- **"Report issue now" etiquette.** Press it **right after** you reproduce a problem, while the
+  relevant events are still in the on-device buffer (it ships roughly the last half hour). One press
+  per incident is enough — it flushes immediately; mashing it just re-sends overlapping slices and
+  eats your daily budget. Note the rough time and what you did so the operator can line it up with
+  the upload. If an operator asks for "the whole buffer," they will flag your device and it uploads
+  on the next check-in — you do not need to do anything.
+- **Privacy.** At the default level, caller names and numbers are redacted before anything leaves
+  the device. Only a per-device `verbose` opt-in (set by the operator, for consenting testers)
+  includes them, and the tester build says so. Local capture always runs; disabling telemetry only
+  stops uploads. Data is retained for 60 days.
+
+## Appendix — dashboard queries
+
+Saved SQL for the Studio SQL editor (read-only; the service role and dashboard are the only
+readers). Substitute the bracketed values.
+
+```sql
+-- One device's story in a time window (skew-corrected: server_ts is authoritative).
+select i.server_ts, i.kind, i.call_id, s.incident_type, s.codepoint, s.degradations, i.payload_path
+from incidents i
+  join devices d on d.install_id = i.install_id
+  left join issues s on s.fingerprint = i.fingerprint
+where d.device_label = '[label]'
+  and i.server_ts between '[from]' and '[to]'
+order by i.server_ts desc;
+
+-- Full narrative for one call across every device that saw it.
+select d.device_label, i.server_ts, i.kind, i.fingerprint, i.payload_path
+from incidents i join devices d on d.install_id = i.install_id
+where i.call_id = '[call_id]'
+order by i.server_ts;
+
+-- Top open issues by how many distinct devices hit them (triage priority).
+select fingerprint, incident_type, codepoint, degradations, device_count, occurrence_count, last_seen
+from issues
+where status = 'open'
+order by device_count desc, occurrence_count desc
+limit 50;
+
+-- OEM × degradation heat-map from the nightly roll-up (no scan of raw rows).
+select manufacturer, model, sdk_int, devices, counters
+from fleet_daily
+where day = '[day]'
+order by devices desc;
+
+-- Silent > 48 h: devices that checked in before but have gone quiet
+-- (heartbeat gap = possible force-stop / OEM-killer population).
+select device_label, manufacturer, model, sdk_int, last_seen
+from devices
+where last_seen < now() - interval '48 hours'
+order by last_seen asc;
+```
