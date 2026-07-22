@@ -1632,6 +1632,90 @@ data class DiagnosticsReport (
     return "DiagnosticsReport(findings=$findings, eventLogHealth=$eventLogHealth, lastShowResult=$lastShowResult, lastDeliveryPath=$lastDeliveryPath, ringTraces=$ringTraces, generatedAtEpochMs=$generatedAtEpochMs)"
   }
 }
+
+/**
+ * §11.5 — live telemetry state for a tester settings screen. Never carries the
+ * `apiKey` or device token (§11.4). Returned only when telemetry is enabled;
+ * [RingKitHostApi.telemetryStatus] returns null when config is null (inert).
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class TelemetryStatus (
+  val deviceLabel: String,
+  val endpoint: String,
+  /** A per-install device token has been issued by the server (first check-in). */
+  val registered: Boolean,
+  /**
+   * Effective on-device capture level (server `log_level` override, else the
+   * app config level) — what the black-box sink is actually recording at.
+   */
+  val captureLevel: RingKitLogLevel,
+  /** Server flagged this install for a full-buffer pull on the next check-in. */
+  val pullPending: Boolean,
+  val sampled: Boolean,
+  /** Effective daily upload budget (server override, else config). */
+  val budgetKb: Long,
+  /** Fleet kill switch — true ⇒ uploads paused (local capture continues). */
+  val killed: Boolean,
+  /** Bytes uploaded so far today against [budgetKb] × 1024 (pulls excluded). */
+  val bytesUploadedToday: Long
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): TelemetryStatus {
+      val deviceLabel = pigeonVar_list[0] as String
+      val endpoint = pigeonVar_list[1] as String
+      val registered = pigeonVar_list[2] as Boolean
+      val captureLevel = pigeonVar_list[3] as RingKitLogLevel
+      val pullPending = pigeonVar_list[4] as Boolean
+      val sampled = pigeonVar_list[5] as Boolean
+      val budgetKb = pigeonVar_list[6] as Long
+      val killed = pigeonVar_list[7] as Boolean
+      val bytesUploadedToday = pigeonVar_list[8] as Long
+      return TelemetryStatus(deviceLabel, endpoint, registered, captureLevel, pullPending, sampled, budgetKb, killed, bytesUploadedToday)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      deviceLabel,
+      endpoint,
+      registered,
+      captureLevel,
+      pullPending,
+      sampled,
+      budgetKb,
+      killed,
+      bytesUploadedToday,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as TelemetryStatus
+    return MessagesPigeonUtils.deepEquals(this.deviceLabel, other.deviceLabel) && MessagesPigeonUtils.deepEquals(this.endpoint, other.endpoint) && MessagesPigeonUtils.deepEquals(this.registered, other.registered) && MessagesPigeonUtils.deepEquals(this.captureLevel, other.captureLevel) && MessagesPigeonUtils.deepEquals(this.pullPending, other.pullPending) && MessagesPigeonUtils.deepEquals(this.sampled, other.sampled) && MessagesPigeonUtils.deepEquals(this.budgetKb, other.budgetKb) && MessagesPigeonUtils.deepEquals(this.killed, other.killed) && MessagesPigeonUtils.deepEquals(this.bytesUploadedToday, other.bytesUploadedToday)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.deviceLabel)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.endpoint)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.registered)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.captureLevel)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.pullPending)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.sampled)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.budgetKb)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.killed)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.bytesUploadedToday)
+    return result
+  }
+  override fun toString(): String {
+    return "TelemetryStatus(deviceLabel=$deviceLabel, endpoint=$endpoint, registered=$registered, captureLevel=$captureLevel, pullPending=$pullPending, sampled=$sampled, budgetKb=$budgetKb, killed=$killed, bytesUploadedToday=$bytesUploadedToday)"
+  }
+}
 private open class MessagesPigeonCodec : StandardMessageCodec() {
   override fun readValueOfType(type: Byte, buffer: ByteBuffer): Any? {
     return when (type) {
@@ -1835,6 +1919,11 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
           DiagnosticsReport.fromList(it)
         }
       }
+      169.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          TelemetryStatus.fromList(it)
+        }
+      }
       else -> super.readValueOfType(type, buffer)
     }
   }
@@ -2000,6 +2089,10 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         stream.write(168)
         writeValue(stream, value.toList())
       }
+      is TelemetryStatus -> {
+        stream.write(169)
+        writeValue(stream, value.toList())
+      }
       else -> super.writeValue(stream, value)
     }
   }
@@ -2047,6 +2140,17 @@ interface RingKitHostApi {
    */
   fun registerBackgroundEventHandler(dispatcherHandle: Long, handlerHandle: Long, callback: (Result<Unit>) -> Unit)
   fun diagnose(callback: (Result<DiagnosticsReport>) -> Unit)
+  /**
+   * §11.5 "Report issue now" — schedules an immediate `user_report` upload
+   * (recent buffer slice). Returns false when telemetry is disabled (config
+   * null) — the sink keeps writing locally either way. Never on the ring path.
+   */
+  fun reportIssue(callback: (Result<Boolean>) -> Unit)
+  /**
+   * §11.5 tester settings screen — current knobs + budget; null when
+   * telemetry is disabled. Never carries the apiKey/token.
+   */
+  fun telemetryStatus(callback: (Result<TelemetryStatus?>) -> Unit)
 
   companion object {
     /** The codec used by RingKitHostApi. */
@@ -2376,6 +2480,42 @@ interface RingKitHostApi {
         if (api != null) {
           channel.setMessageHandler { _, reply ->
             api.diagnose{ result: Result<DiagnosticsReport> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(MessagesPigeonUtils.wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(MessagesPigeonUtils.wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.ringkit.RingKitHostApi.reportIssue$separatedMessageChannelSuffix", codec, taskQueue)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.reportIssue{ result: Result<Boolean> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(MessagesPigeonUtils.wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(MessagesPigeonUtils.wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.ringkit.RingKitHostApi.telemetryStatus$separatedMessageChannelSuffix", codec, taskQueue)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.telemetryStatus{ result: Result<TelemetryStatus?> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(MessagesPigeonUtils.wrapError(error))

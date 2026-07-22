@@ -233,6 +233,29 @@ internal class RingKitHostApiImpl(
             )
         }
 
+    override fun reportIssue(callback: (Result<Boolean>) -> Unit) =
+        onWriter(callback) {
+            // §11.5: schedules an immediate user_report; false ⇒ telemetry off.
+            com.wibechat.ringkit.telemetry.Telemetry.userReportNow()
+        }
+
+    override fun telemetryStatus(callback: (Result<TelemetryStatus?>) -> Unit) =
+        onWriter(callback) {
+            com.wibechat.ringkit.telemetry.Telemetry.status()?.let { s ->
+                TelemetryStatus(
+                    deviceLabel = s.deviceLabel,
+                    endpoint = s.endpoint,
+                    registered = s.registered,
+                    captureLevel = RingKitLogLevel.valueOf(s.captureLevel.name),
+                    pullPending = s.pullPending,
+                    sampled = s.sampled,
+                    budgetKb = s.budgetKb.toLong(),
+                    killed = s.killed,
+                    bytesUploadedToday = s.bytesUploadedToday.toLong(),
+                )
+            }
+        }
+
     /** Rebuild the §6.4-composed ShowCallResult from the stored breadcrumb. */
     private fun lastShowResultFromStore(): ShowCallResult? {
         val raw = core.store.readLastShowResult() ?: return null

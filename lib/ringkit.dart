@@ -254,6 +254,18 @@ abstract final class RingKit {
   /// §11.3 — the support-load killer. Serializable; attach it to bug reports.
   static Future<DiagnosticsReport> diagnose() => _api.diagnose();
 
+  // ── Telemetry (§11.5 — only meaningful when RingKitConfig.telemetry set) ──
+
+  /// "Report issue now": flushes the recent black-box slice to the fleet
+  /// endpoint immediately (a `user_report`). Returns false when telemetry is
+  /// disabled (no [RingKitConfig.telemetry]) — the local sink is unaffected.
+  /// Uploads run off the ring path via WorkManager; this only enqueues.
+  static Future<bool> reportIssue() => _api.reportIssue();
+
+  /// Current fleet knobs + budget for a tester settings screen, or null when
+  /// telemetry is disabled. Never carries the apiKey or device token.
+  static Future<TelemetryStatus?> telemetryStatus() => _api.telemetryStatus();
+
   // ── misuse rules (§6.1/§6.4) — native re-enforces; this keeps results
   //    typed and instant without crossing the bridge ─────────────────────
 

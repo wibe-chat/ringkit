@@ -1,6 +1,7 @@
 package com.wibechat.ringkit.telemetry
 
 import com.wibechat.ringkit.core.CoreEventType
+import com.wibechat.ringkit.core.CoreLogLevel
 import com.wibechat.ringkit.core.CoreStore
 import com.wibechat.ringkit.core.CoreTelemetryConfig
 import com.wibechat.ringkit.core.RingKitCore
@@ -82,6 +83,41 @@ internal object Telemetry {
         executor.execute { current.scheduler.scheduleUserReport() }
         return true
     }
+
+    /**
+     * §11.5 tester settings snapshot — null when telemetry is disabled. Reads
+     * the (already-loaded) state file; NEVER exposes the apiKey or token. Safe
+     * off any thread (state reads are synchronized); no network.
+     */
+    fun status(): StatusSnapshot? {
+        val s = session ?: return null
+        val state = s.state
+        val today = TelemetryEngine.dayUtc(s.core.time.wallMs())
+        return StatusSnapshot(
+            deviceLabel = s.config.deviceLabel,
+            endpoint = s.config.endpoint,
+            registered = state.deviceToken != null,
+            captureLevel = s.core.ringLog.level,
+            pullPending = state.pullPending,
+            sampled = state.sampled,
+            budgetKb = state.knobBudgetKb ?: s.config.dailyUploadBudgetKb,
+            killed = state.killed,
+            bytesUploadedToday = state.bytesToday(today),
+        )
+    }
+
+    /** Flutter-free status holder; the adapter maps it to the Pigeon type. */
+    internal data class StatusSnapshot(
+        val deviceLabel: String,
+        val endpoint: String,
+        val registered: Boolean,
+        val captureLevel: CoreLogLevel,
+        val pullPending: Boolean,
+        val sampled: Boolean,
+        val budgetKb: Int,
+        val killed: Boolean,
+        val bytesUploadedToday: Int,
+    )
 
     // ── session ──────────────────────────────────────────────────────────
 

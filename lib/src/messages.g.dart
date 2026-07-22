@@ -1645,6 +1645,110 @@ class DiagnosticsReport {
   }
 }
 
+/// §11.5 — live telemetry state for a tester settings screen. Never carries the
+/// `apiKey` or device token (§11.4). Returned only when telemetry is enabled;
+/// [RingKitHostApi.telemetryStatus] returns null when config is null (inert).
+class TelemetryStatus {
+  TelemetryStatus({
+    required this.deviceLabel,
+    required this.endpoint,
+    required this.registered,
+    required this.captureLevel,
+    required this.pullPending,
+    required this.sampled,
+    required this.budgetKb,
+    required this.killed,
+    required this.bytesUploadedToday,
+  });
+
+  String deviceLabel;
+
+  String endpoint;
+
+  /// A per-install device token has been issued by the server (first check-in).
+  bool registered;
+
+  /// Effective on-device capture level (server `log_level` override, else the
+  /// app config level) — what the black-box sink is actually recording at.
+  RingKitLogLevel captureLevel;
+
+  /// Server flagged this install for a full-buffer pull on the next check-in.
+  bool pullPending;
+
+  bool sampled;
+
+  /// Effective daily upload budget (server override, else config).
+  int budgetKb;
+
+  /// Fleet kill switch — true ⇒ uploads paused (local capture continues).
+  bool killed;
+
+  /// Bytes uploaded so far today against [budgetKb] × 1024 (pulls excluded).
+  int bytesUploadedToday;
+
+  List<Object?> _toList() {
+    return <Object?>[
+      deviceLabel,
+      endpoint,
+      registered,
+      captureLevel,
+      pullPending,
+      sampled,
+      budgetKb,
+      killed,
+      bytesUploadedToday,
+    ];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static TelemetryStatus decode(Object result) {
+    result as List<Object?>;
+    return TelemetryStatus(
+      deviceLabel: result[0]! as String,
+      endpoint: result[1]! as String,
+      registered: result[2]! as bool,
+      captureLevel: result[3]! as RingKitLogLevel,
+      pullPending: result[4]! as bool,
+      sampled: result[5]! as bool,
+      budgetKb: result[6]! as int,
+      killed: result[7]! as bool,
+      bytesUploadedToday: result[8]! as int,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! TelemetryStatus || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(deviceLabel, other.deviceLabel) &&
+        _deepEquals(endpoint, other.endpoint) &&
+        _deepEquals(registered, other.registered) &&
+        _deepEquals(captureLevel, other.captureLevel) &&
+        _deepEquals(pullPending, other.pullPending) &&
+        _deepEquals(sampled, other.sampled) &&
+        _deepEquals(budgetKb, other.budgetKb) &&
+        _deepEquals(killed, other.killed) &&
+        _deepEquals(bytesUploadedToday, other.bytesUploadedToday);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'TelemetryStatus(deviceLabel: $deviceLabel, endpoint: $endpoint, registered: $registered, captureLevel: $captureLevel, pullPending: $pullPending, sampled: $sampled, budgetKb: $budgetKb, killed: $killed, bytesUploadedToday: $bytesUploadedToday)';
+  }
+}
+
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
   @override
@@ -1772,6 +1876,9 @@ class _PigeonCodec extends StandardMessageCodec {
     } else if (value is DiagnosticsReport) {
       buffer.putUint8(168);
       writeValue(buffer, value.encode());
+    } else if (value is TelemetryStatus) {
+      buffer.putUint8(169);
+      writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
     }
@@ -1881,6 +1988,8 @@ class _PigeonCodec extends StandardMessageCodec {
         return EventLogHealth.decode(readValue(buffer)!);
       case 168:
         return DiagnosticsReport.decode(readValue(buffer)!);
+      case 169:
+        return TelemetryStatus.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
     }
@@ -2271,6 +2380,49 @@ class RingKitHostApi {
       isNullValid: false,
     );
     return pigeonVar_replyValue! as DiagnosticsReport;
+  }
+
+  /// §11.5 "Report issue now" — schedules an immediate `user_report` upload
+  /// (recent buffer slice). Returns false when telemetry is disabled (config
+  /// null) — the sink keeps writing locally either way. Never on the ring path.
+  Future<bool> reportIssue() async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.ringkit.RingKitHostApi.reportIssue$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
+    return pigeonVar_replyValue! as bool;
+  }
+
+  /// §11.5 tester settings screen — current knobs + budget; null when
+  /// telemetry is disabled. Never carries the apiKey/token.
+  Future<TelemetryStatus?> telemetryStatus() async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.ringkit.RingKitHostApi.telemetryStatus$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
+    return pigeonVar_replyValue as TelemetryStatus?;
   }
 }
 

@@ -498,6 +498,46 @@ class DiagnosticsReport {
   int generatedAtEpochMs;
 }
 
+/// §11.5 — live telemetry state for a tester settings screen. Never carries the
+/// `apiKey` or device token (§11.4). Returned only when telemetry is enabled;
+/// [RingKitHostApi.telemetryStatus] returns null when config is null (inert).
+class TelemetryStatus {
+  TelemetryStatus({
+    required this.deviceLabel,
+    required this.endpoint,
+    required this.registered,
+    required this.captureLevel,
+    required this.pullPending,
+    required this.sampled,
+    required this.budgetKb,
+    required this.killed,
+    required this.bytesUploadedToday,
+  });
+
+  String deviceLabel;
+  String endpoint;
+
+  /// A per-install device token has been issued by the server (first check-in).
+  bool registered;
+
+  /// Effective on-device capture level (server `log_level` override, else the
+  /// app config level) — what the black-box sink is actually recording at.
+  RingKitLogLevel captureLevel;
+
+  /// Server flagged this install for a full-buffer pull on the next check-in.
+  bool pullPending;
+  bool sampled;
+
+  /// Effective daily upload budget (server override, else config).
+  int budgetKb;
+
+  /// Fleet kill switch — true ⇒ uploads paused (local capture continues).
+  bool killed;
+
+  /// Bytes uploaded so far today against [budgetKb] × 1024 (pulls excluded).
+  int bytesUploadedToday;
+}
+
 // ─────────────────────────────────────────────────────────────── host APIs ──
 
 /// Core commands (§6.1). Implementations dispatch to the single writer
@@ -582,6 +622,19 @@ abstract class RingKitHostApi {
   @TaskQueue(type: TaskQueueType.serialBackgroundThread)
   @async
   DiagnosticsReport diagnose();
+
+  /// §11.5 "Report issue now" — schedules an immediate `user_report` upload
+  /// (recent buffer slice). Returns false when telemetry is disabled (config
+  /// null) — the sink keeps writing locally either way. Never on the ring path.
+  @TaskQueue(type: TaskQueueType.serialBackgroundThread)
+  @async
+  bool reportIssue();
+
+  /// §11.5 tester settings screen — current knobs + budget; null when
+  /// telemetry is disabled. Never carries the apiKey/token.
+  @TaskQueue(type: TaskQueueType.serialBackgroundThread)
+  @async
+  TelemetryStatus? telemetryStatus();
 }
 
 /// §11.2 — permission state + request/deep-link helpers. Never called mid-ring
