@@ -115,10 +115,16 @@ Deno.serve(async (req: Request) => {
       : null;
 
     if (kind === "heartbeat") {
+      // Fold the explicit dropped_logs field into the counters map so the
+      // sink-drop signal survives into fleet_daily (contract carries both).
+      const counters = { ...(body.heartbeat?.counters ?? {}) };
+      if (typeof body.heartbeat?.dropped_logs === "number" && body.heartbeat.dropped_logs > 0) {
+        counters.droppedLogs = (counters.droppedLogs ?? 0) + body.heartbeat.dropped_logs;
+      }
       const { error } = await supabase.rpc("ringkit_record_heartbeat", {
         p_install: installId,
         p_day: body.heartbeat?.day ?? new Date().toISOString().slice(0, 10),
-        p_counters: body.heartbeat?.counters ?? {},
+        p_counters: counters,
         p_fingerprints: body.heartbeat?.fingerprints ?? {},
       });
       if (error) throw new Error(error.message);
@@ -132,7 +138,12 @@ Deno.serve(async (req: Request) => {
       const deviceTs = typeof inc.device_ts_ms === "number"
         ? new Date(inc.device_ts_ms).toISOString()
         : null;
-      // Bookkeeping FIRST (it detects idempotent retries without a storage write).
+      // Upload FIRST: if bookkeeping-then-upload ordered the other way, a failed
+      // upload after successful bookkeeping would make every retry a "duplicate"
+      // and the payload would never land. Upload-first converges: a failed
+      // bookkeeping retry re-uploads under a new path and the orphan object is
+      // TTL-purged; a true duplicate retry removes its redundant object below.
+      await uploadPayload(path, inc.records_gzip_b64);
       const { data: fresh, error } = await supabase.rpc("ringkit_record_incident", {
         p_install: installId,
         p_fingerprint: inc.fingerprint,
@@ -146,7 +157,10 @@ Deno.serve(async (req: Request) => {
         p_clock_offset_ms: clockOffsetMs,
       });
       if (error) throw new Error(error.message);
-      if (fresh) await uploadPayload(path, inc.records_gzip_b64);
+      if (!fresh) {
+        // Idempotent retry: the payload already exists under the original path.
+        await supabase.storage.from("ringkit-logs").remove([path]);
+      }
       return json(200, knobs(gate, { duplicate: !fresh }));
     }
 
