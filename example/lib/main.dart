@@ -7,6 +7,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:ringkit/ringkit.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// §10.4 background handler — a TOP-LEVEL `@pragma('vm:entry-point')` function
 /// that runs in a headless isolate when an actionable event (decline/timeout/
@@ -50,9 +51,64 @@ Future<void> ringkitExampleBackgroundHandler(CallEvent event) async {
 /// manifest. Keep the two in sync.
 const bool kMode2NativeFcm = true;
 
+/// Tester telemetry settings, persisted locally (example-only) so the choice
+/// survives a force-stop/kill — the plugin's native config is last-writer-wins,
+/// so every `initialize()` must carry the SAME telemetry block or it would be
+/// wiped on the next boot. The apiKey is a fleet secret: kept only in the
+/// device's prefs, never hard-coded here (§11.5 / repo hygiene).
+class TelemetryPrefs {
+  static const _enabled = 'tel.enabled';
+  static const _endpoint = 'tel.endpoint';
+  static const _apiKey = 'tel.apiKey';
+  static const _label = 'tel.deviceLabel';
+
+  final bool enabled;
+  final String endpoint;
+  final String apiKey;
+  final String deviceLabel;
+
+  const TelemetryPrefs({
+    required this.enabled,
+    required this.endpoint,
+    required this.apiKey,
+    required this.deviceLabel,
+  });
+
+  static Future<TelemetryPrefs> load() async {
+    final p = await SharedPreferences.getInstance();
+    return TelemetryPrefs(
+      enabled: p.getBool(_enabled) ?? false,
+      endpoint: p.getString(_endpoint) ?? '',
+      apiKey: p.getString(_apiKey) ?? '',
+      deviceLabel: p.getString(_label) ?? 'example-device',
+    );
+  }
+
+  Future<void> save() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(_enabled, enabled);
+    await p.setString(_endpoint, endpoint);
+    await p.setString(_apiKey, apiKey);
+    await p.setString(_label, deviceLabel);
+  }
+
+  /// null ⇒ telemetry inert (missing endpoint/apiKey or disabled).
+  RingKitTelemetryConfig? toConfig() {
+    if (!enabled || endpoint.isEmpty || apiKey.isEmpty) return null;
+    return RingKitTelemetryConfig(
+      endpoint: endpoint,
+      apiKey: apiKey,
+      deviceLabel: deviceLabel,
+      uploadLevel: RingKitLogLevel.info,
+      dailyUploadBudgetKb: 200,
+    );
+  }
+}
+
 /// Shared RingKit config used by both the foreground app (`_start`) and the
-/// Mode-1 FCM background isolate — they MUST configure identically.
-RingKitConfig ringkitExampleConfig() => RingKitConfig(
+/// Mode-1 FCM background isolate — they MUST configure identically (incl. the
+/// telemetry block, loaded from the tester's persisted settings).
+Future<RingKitConfig> ringkitExampleConfig() async => RingKitConfig(
       incomingChannelName: 'Incoming calls',
       missedChannelName: 'Missed calls',
       ongoingChannelName: 'Ongoing call',
@@ -66,6 +122,7 @@ RingKitConfig ringkitExampleConfig() => RingKitConfig(
       notificationIdBase: 424200,
       logLevel: RingKitLogLevel.info,
       channelSuffix: '',
+      telemetry: (await TelemetryPrefs.load()).toConfig(),
     );
 
 /// §7.2 Mode 1 — the app's OWN `firebase_messaging` background handler. Runs in a
@@ -82,7 +139,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     // rk.* push before Dart even started; it co-delivers here via FlutterFire's
     // receiver, so guard it out — do NOT ring again. Mode 1 rings it from Dart.
     if (kMode2NativeFcm) return;
-    await RingKit.initialize(ringkitExampleConfig());
+    await RingKit.initialize(await ringkitExampleConfig());
     await dispatchRingPush(data, message.sentTime);
     return;
   }
@@ -205,10 +262,26 @@ class _HarnessHomeState extends State<HarnessHome> {
   DiagnosticsReport? _report;
   PermissionSnapshot? _snapshot;
 
+  // §11.5 telemetry tester surface.
+  final _endpointCtl = TextEditingController();
+  final _apiKeyCtl = TextEditingController();
+  final _labelCtl = TextEditingController();
+  bool _telemetryEnabled = false;
+  TelemetryStatus? _telemetryStatus;
+  bool _telemetryBusy = false;
+
   @override
   void initState() {
     super.initState();
     _start();
+  }
+
+  @override
+  void dispose() {
+    _endpointCtl.dispose();
+    _apiKeyCtl.dispose();
+    _labelCtl.dispose();
+    super.dispose();
   }
 
   void _log(String line) {
@@ -248,7 +321,7 @@ class _HarnessHomeState extends State<HarnessHome> {
       unawaited(_refreshActive());
     }, onError: (Object e) => _log('stream error: $e'));
 
-    await RingKit.initialize(ringkitExampleConfig());
+    await RingKit.initialize(await ringkitExampleConfig());
     final launch = await RingKit.consumeLaunchAction();
     if (launch != null) {
       _log('▶ launch action: ${launch.type.name} seq=${launch.sequence}'
@@ -422,6 +495,48 @@ class _HarnessHomeState extends State<HarnessHome> {
     setState(() => _snapshot = snapshot);
   }
 
+  // ── telemetry (§11.5) ──────────────────────────────────────────────────
+
+  Future<void> _loadTelemetryTab() async {
+    final prefs = await TelemetryPrefs.load();
+    final status = await RingKit.telemetryStatus();
+    if (!mounted) return;
+    setState(() {
+      // Only seed the fields on first open — don't stomp mid-edit text.
+      if (_endpointCtl.text.isEmpty) _endpointCtl.text = prefs.endpoint;
+      if (_apiKeyCtl.text.isEmpty) _apiKeyCtl.text = prefs.apiKey;
+      if (_labelCtl.text.isEmpty) _labelCtl.text = prefs.deviceLabel;
+      _telemetryEnabled = prefs.enabled;
+      _telemetryStatus = status;
+    });
+  }
+
+  Future<void> _applyTelemetry({required bool enable}) async {
+    setState(() => _telemetryBusy = true);
+    final prefs = TelemetryPrefs(
+      enabled: enable,
+      endpoint: _endpointCtl.text.trim(),
+      apiKey: _apiKeyCtl.text.trim(),
+      deviceLabel: _labelCtl.text.trim().isEmpty
+          ? 'example-device'
+          : _labelCtl.text.trim(),
+    );
+    await prefs.save();
+    // Re-initialize so native picks up (or drops) the telemetry block now.
+    await RingKit.initialize(await ringkitExampleConfig());
+    _log(enable
+        ? 'telemetry ENABLED → ${prefs.endpoint} (label ${prefs.deviceLabel})'
+        : 'telemetry DISABLED (local sink keeps writing)');
+    await _loadTelemetryTab();
+    if (mounted) setState(() => _telemetryBusy = false);
+  }
+
+  Future<void> _reportIssueNow() async {
+    final scheduled = await RingKit.reportIssue();
+    _log('reportIssue() → ${scheduled ? "scheduled" : "telemetry disabled"}');
+    await _loadTelemetryTab();
+  }
+
   // ── UI ────────────────────────────────────────────────────────────────
 
   @override
@@ -439,6 +554,7 @@ class _HarnessHomeState extends State<HarnessHome> {
       body: switch (_tab) {
         1 => _diagnosticsTab(),
         2 => _permissionsTab(),
+        3 => _telemetryTab(),
         _ => _harnessTab(),
       },
       bottomNavigationBar: NavigationBar(
@@ -447,11 +563,13 @@ class _HarnessHomeState extends State<HarnessHome> {
           setState(() => _tab = i);
           if (i == 1) unawaited(_runDiagnostics());
           if (i == 2) unawaited(_loadSnapshot());
+          if (i == 3) unawaited(_loadTelemetryTab());
         },
         destinations: const [
           NavigationDestination(icon: Icon(Icons.call), label: 'Harness'),
           NavigationDestination(icon: Icon(Icons.healing), label: 'Diagnostics'),
           NavigationDestination(icon: Icon(Icons.security), label: 'Permissions'),
+          NavigationDestination(icon: Icon(Icons.cloud_upload), label: 'Telemetry'),
         ],
       ),
     );
@@ -780,4 +898,130 @@ class _HarnessHomeState extends State<HarnessHome> {
 
   Widget _btn(String label, VoidCallback onTap) =>
       ElevatedButton(onPressed: onTap, child: Text(label));
+
+  // §11.5 tester settings: endpoint/apiKey/deviceLabel + enable, Report-now,
+  // and the live server-driven knobs. The apiKey field is obscured and its
+  // value is never logged or shown back by telemetryStatus (§11.4).
+  Widget _telemetryTab() {
+    final status = _telemetryStatus;
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        Row(children: [
+          Expanded(
+              child: Text('Fleet telemetry (§11.5)',
+                  style: Theme.of(context).textTheme.titleMedium)),
+          IconButton(
+              onPressed: () => unawaited(_loadTelemetryTab()),
+              icon: const Icon(Icons.refresh)),
+        ]),
+        const Card(
+          child: Padding(
+            padding: EdgeInsets.all(12),
+            child: Text(
+              'Tester diagnostics: when enabled, this build ships crash-class '
+              'incidents and a tiny daily heartbeat to the fleet endpoint so '
+              'failures can be triaged centrally. Caller names/numbers are '
+              'redacted unless the operator raises the level. Uploads run in '
+              'the background, never on the ring path. The local black-box log '
+              'is always kept on-device regardless of this switch.',
+              style: TextStyle(fontSize: 12),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _endpointCtl,
+          decoration: const InputDecoration(
+            labelText: 'Endpoint',
+            hintText: 'https://<project>.supabase.co',
+            border: OutlineInputBorder(),
+          ),
+          keyboardType: TextInputType.url,
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _apiKeyCtl,
+          decoration: const InputDecoration(
+            labelText: 'Fleet apiKey',
+            hintText: 'from the operator — stored on-device only',
+            border: OutlineInputBorder(),
+          ),
+          obscureText: true,
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _labelCtl,
+          decoration: const InputDecoration(
+            labelText: 'Device label',
+            hintText: 'how this device shows up in the dashboard',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(
+            child: FilledButton.icon(
+              onPressed: _telemetryBusy
+                  ? null
+                  : () => unawaited(_applyTelemetry(enable: true)),
+              icon: const Icon(Icons.cloud_done),
+              label: Text(_telemetryEnabled ? 'Re-apply' : 'Enable'),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: (_telemetryBusy || !_telemetryEnabled)
+                  ? null
+                  : () => unawaited(_applyTelemetry(enable: false)),
+              icon: const Icon(Icons.cloud_off),
+              label: const Text('Disable'),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: (_telemetryBusy || !_telemetryEnabled)
+              ? null
+              : () => unawaited(_reportIssueNow()),
+          icon: const Icon(Icons.bug_report),
+          label: const Text('Report issue now'),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: status == null
+                ? const Text('Telemetry disabled — no live status.',
+                    style: TextStyle(fontSize: 13))
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Current fleet knobs',
+                          style: Theme.of(context).textTheme.titleSmall),
+                      const SizedBox(height: 4),
+                      _kv('device label', status.deviceLabel),
+                      _kv('registered', status.registered ? 'yes (token issued)' : 'not yet'),
+                      _kv('capture level', status.captureLevel.name),
+                      _kv('pull requested', status.pullPending ? 'YES — full buffer next check-in' : 'no'),
+                      _kv('sampled', status.sampled ? 'yes' : 'no'),
+                      _kv('kill switch', status.killed ? 'ON — uploads paused' : 'off'),
+                      _kv('budget', '${status.budgetKb} KB/day'),
+                      _kv('used today', '${status.bytesUploadedToday} B'),
+                    ],
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _kv(String k, String v) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(children: [
+          SizedBox(width: 120, child: Text(k, style: const TextStyle(fontSize: 12, color: Colors.grey))),
+          Expanded(child: Text(v, style: const TextStyle(fontSize: 12))),
+        ]),
+      );
 }

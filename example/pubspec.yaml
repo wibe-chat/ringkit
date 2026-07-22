@@ -34,6 +34,7 @@ dependencies:
   # firebase-messaging SDK transitively, so no native dep is declared here.
   firebase_core: ^4.11.0
   firebase_messaging: ^16.4.1
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   integration_test:
