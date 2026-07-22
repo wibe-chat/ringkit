@@ -84,10 +84,24 @@ internal class TelemetryEngine(
         val files = ringLog.incidentFiles()
         state.pruneShippedIncidents(files.map { it.name }.toSet())
         val today = today()
-        return files.filter { f ->
-            val fp = f.name.substringBeforeLast('-')
-            fp.isNotBlank() && !state.isFileShipped(f.name) && state.fingerprintShippedOn(fp) != today
-        }
+        val seen = HashSet<String>()
+        // At most ONE upload per fingerprint per UTC day. `seen` also collapses
+        // multiple snapshot files that share a fingerprint in this very batch —
+        // a prior process can die before capture-side dedup meta persists (e.g.
+        // the killed-state harness), leaving >1 file per fingerprint on disk;
+        // without this collapse the pre-batch filter would pass all of them and
+        // ship duplicates (device-found on SM-G781B, 2026-07-23). Newest first
+        // so the freshest snapshot is the one kept; the rest age out via
+        // RingLog's incident-file pruning.
+        return files
+            .sortedByDescending { it.name.substringAfterLast('-').removeSuffix(".jsonl").toLongOrNull() ?: 0L }
+            .filter { f ->
+                val fp = f.name.substringBeforeLast('-')
+                fp.isNotBlank() &&
+                    !state.isFileShipped(f.name) &&
+                    state.fingerprintShippedOn(fp) != today &&
+                    seen.add(fp)
+            }
     }
 
     fun runIncidents(): TelemetryRun {

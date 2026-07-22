@@ -107,6 +107,31 @@ class TelemetryEngineTest {
     }
 
     @Test
+    fun `two pre-existing files of one fingerprint ship only once in a batch`() {
+        // A prior process death (killed-state harness) can leave >1 snapshot
+        // file for the SAME fingerprint before capture-side dedup meta persists.
+        // The first upload batch must still ship at most once (device-found on
+        // SM-G781B: both shipped → two storage objects for one fingerprint).
+        val h = EngineHarness()
+        h.state.deviceToken = "tok-1"
+        val incidentsDir = File(h.logsDir, "incidents").apply { mkdirs() }
+        val line = """{"seq":1,"wall":${h.time.wall},"level":"ERROR","tag":"incident",""" +
+            """"cp":"Orchestrator.executeShow","event":"incident:FGS_DENIED",""" +
+            """"data":{"fingerprint":"deadbeefdeadbeef","degradations":"fgsDenied"}}"""
+        File(incidentsDir, "deadbeefdeadbeef-${h.time.wall}.jsonl").writeText(line + "\n")
+        File(incidentsDir, "deadbeefdeadbeef-${h.time.wall + 500}.jsonl").writeText(line + "\n")
+
+        assertEquals(2, h.ringLog.incidentFiles().size, "two files on disk")
+        assertEquals(1, h.engine().pendingIncidentFiles().size, "collapsed to one per fingerprint")
+        assertEquals(TelemetryRun.OK, h.engine().runIncidents())
+        assertEquals(
+            1,
+            h.transport.sent.count { it.payload.optString("kind") == "incident" },
+            "once per fingerprint per device per day even with duplicate files",
+        )
+    }
+
+    @Test
     fun `retry payloads are idempotent — same fingerprint and device_ts`() {
         val h = EngineHarness()
         h.state.deviceToken = "tok-1"
