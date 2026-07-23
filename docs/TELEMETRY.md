@@ -11,9 +11,12 @@ Uploads never use FCM or any high-priority channel and never run on the call-sho
 POST {endpoint}/functions/v1/checkin
 Content-Type: application/json
 Content-Encoding: gzip            (optional but recommended)
-Authorization: Bearer <apiKey>            for kind=register
+Authorization: Bearer <fleet apiKey>      for kind=register
 Authorization: Bearer <device_token>      for every other kind
 ```
+
+Each app registers with its **own** fleet apiKey; the key determines the app the device belongs to
+(see "Multiple apps" below). One backend can serve many apps this way.
 
 ## Request
 
@@ -21,7 +24,8 @@ Authorization: Bearer <device_token>      for every other kind
 { "v": 1, "kind": "register|heartbeat|incident|user_report|pull",
   "install_id": "<uuid>", "device_wall_ms": 0, "boot_count": 3,
   "device": { "label": "…", "manufacturer": "…", "model": "…", "sdk_int": 34,
-              "app_version": "…", "plugin_version": "…" },          // register (+ heartbeat refresh)
+              "app_version": "…", "plugin_version": "…",
+              "package_name": "com.acme.app" },                     // register (+ heartbeat refresh)
   "heartbeat": { "day": "2026-07-22", "counters": {…}, "fingerprints": {…}, "dropped_logs": 0 },
   "incident":  { "fingerprint": "…", "incident_type": "…", "codepoint": "…",
                  "degradations": ["fgsDenied"], "call_id": "…", "device_ts_ms": 0,
@@ -82,14 +86,35 @@ budget (they are operator-initiated) and clear the `pull_buffer` flag when the l
 
 ## Server side (summary)
 
-- Postgres tables: `devices` (identity + knobs + budget), `issues` (one row per unique failure
-  fingerprint), `issue_devices`, `incidents` (payload index), `heartbeats`, `fleet_daily`
-  (nightly roll-up for heat-maps). Payloads live in the private `ringkit-logs` storage bucket
-  (`incidents/{install_id}/…`, `pulls/{install_id}/…`), gzipped JSONL.
+- Postgres tables: `devices` (identity + `app_id` + `package_name` + knobs + budget), `fleet_keys`
+  (one row per app: `api_key → app_id`), `issues` (one row per unique failure fingerprint),
+  `issue_devices`, `incidents` (payload index), `heartbeats`, `fleet_daily` (nightly roll-up for
+  heat-maps, keyed by `app_id` + device attributes). Payloads live in the private `ringkit-logs`
+  storage bucket (`incidents/{install_id}/…`, `pulls/{install_id}/…`), gzipped JSONL.
 - Retention: 60 days for incidents/heartbeats/payload objects (nightly purge); heat-map
   roll-ups are kept.
 - All tables are deny-by-default (no anonymous access); only the edge functions (service role)
   and the dashboard can touch data.
+
+## Multiple apps (per-app keys)
+
+The backend is multi-app: every device carries an `app_id`, and `app_id` is decided by the **fleet
+key the app registered with** (in `fleet_keys`), not by anything the client sends — so an app can't
+masquerade as another. Give each app its own key:
+
+```sql
+-- mint a key for a new app (any opaque random string)
+insert into fleet_keys (api_key, app_id, label)
+values ('<random-key>', 'acme-driver-app', 'Acme Driver — prod');
+-- revoke one app without touching the others
+update fleet_keys set active = false where api_key = '<random-key>';
+```
+
+Hand that app's developer *its* key + the endpoint. Every device running that app then reports under
+`app_id = 'acme-driver-app'`, so all the dashboard queries below filter/group by app with a
+`join fleet_keys` or a `where app_id = …`. A common key across apps still works (they'd share one
+`app_id`) but you lose per-app attribution, budgeting, and revocation — prefer one key per app.
+`device.package_name` is stored next to `app_id` as a self-reported cross-check (flag mismatches).
 
 ## Cost model
 
