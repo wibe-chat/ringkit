@@ -5,6 +5,14 @@
   functions = "netlify/functions"
   publish = "public"
 
+[build.environment]
+  # SUPABASE_URL is the PUBLIC project endpoint (every device hits it; it ships
+  # in the app's telemetry config) — it is NOT a secret. Netlify's secret scanner
+  # flags it only because its value appears in this folder's README as the value
+  # to paste. Exclude that one key; the real secret (SUPABASE_SERVICE_ROLE_KEY)
+  # is never in source, so it stays scanned.
+  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_URL"
+
 [functions]
   node_bundler = "esbuild"
 
