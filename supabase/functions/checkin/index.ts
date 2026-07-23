@@ -1,8 +1,14 @@
 // ringkit fleet telemetry — single check-in endpoint.
 //
 // POST /functions/v1/checkin   (Content-Encoding: gzip supported)
-//   Authorization: Bearer <fleet api key>   for kind=register
-//   Authorization: Bearer <device_token>    for every other kind
+//   Authorization: Bearer <per-app fleet api key>   for kind=register
+//   Authorization: Bearer <device_token>            for every other kind
+//
+// Multi-app: each app registers with its OWN fleet key (fleet_keys.api_key →
+// app_id). The device is tagged with that app_id (authoritative — a client
+// can't spoof its app), so one endpoint serves many apps with server-side
+// separation; the client-reported package_name is stored alongside as a
+// self-report cross-check.
 //
 // Request/response contracts are documented in docs/TELEMETRY.md. The function
 // is a thin transport shell: all counter bookkeeping is atomic in Postgres
@@ -81,11 +87,11 @@ Deno.serve(async (req: Request) => {
   if (!token || !installId || !kind) return json(400, { error: "missing fields" });
 
   try {
-    // ── register: fleet api key auth ─────────────────────────────────────
+    // ── register: per-app fleet key auth (fleet_keys.api_key → app_id) ────
     if (kind === "register") {
-      const { data: cfg, error } = await supabase
-        .from("fleet_config").select("value").eq("key", "api_key").single();
-      if (error || !cfg || cfg.value !== token) return json(401, { error: "unauthorized" });
+      const { data: key, error } = await supabase
+        .from("fleet_keys").select("app_id, active").eq("api_key", token).maybeSingle();
+      if (error || !key || key.active !== true) return json(401, { error: "unauthorized" });
       const { data, error: rpcErr } = await supabase.rpc("ringkit_register", {
         p_install: installId,
         p_label: body.device?.label ?? null,
@@ -94,6 +100,8 @@ Deno.serve(async (req: Request) => {
         p_sdk: body.device?.sdk_int ?? null,
         p_app_version: body.device?.app_version ?? null,
         p_plugin_version: body.device?.plugin_version ?? null,
+        p_app_id: key.app_id, // authoritative: the key determines the app
+        p_package_name: body.device?.package_name ?? null, // client self-report
       });
       if (rpcErr) throw new Error(rpcErr.message);
       return json(200, data);
