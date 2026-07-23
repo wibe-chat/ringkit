@@ -1,0 +1,14 @@
+# There are no static files: every request is rewritten to the one function,
+# which serves both the dashboard HTML and its JSON API. `public/` is an empty
+# placeholder so Netlify has a publish directory.
+[build]
+  functions = "netlify/functions"
+  publish = "public"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/*"
+  to = "/.netlify/functions/dashboard"
+  status = 200

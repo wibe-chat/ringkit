@@ -1,0 +1,315 @@
+// ringkit fleet telemetry — read/debug dashboard (Netlify Function, Node).
+//
+// One self-contained function serves the HTML dashboard AND its JSON API. It
+// reads every telemetry table with the Supabase SERVICE ROLE (the tables are
+// deny-all RLS, so only this — or Studio — can see them). Hand the deployed
+// URL + the dashboard password to developers: they browse devices across ALL
+// apps, read the decompressed black-box log per incident, and trigger the two
+// SAFE debug knobs (raise capture level, request a full-buffer pull).
+//
+// It never exposes the fleet api keys, the device tokens, or the kill switch.
+// Auth: every /?api=... call must carry `x-dashboard-key: <password>` (stored
+// server-side in fleet_config key='dashboard_password').
+//
+// Env (set in Netlify → Site settings → Environment variables):
+//   SUPABASE_URL                — https://<ref>.supabase.co
+//   SUPABASE_SERVICE_ROLE_KEY   — Supabase → Settings → API → service_role (secret)
+
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+);
+
+const LEVELS = ["none", "error", "info", "verbose"];
+
+function json(status, body) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function safeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function authed(req) {
+  const key = req.headers.get("x-dashboard-key") ?? "";
+  const { data } = await supabase.from("fleet_config").select("value").eq("key", "dashboard_password").maybeSingle();
+  const pw = data?.value ?? "";
+  return !!pw && !!key && safeEqual(key, pw);
+}
+
+async function gunzipText(bytes) {
+  const stream = new Response(bytes).body.pipeThrough(new DecompressionStream("gzip"));
+  return await new Response(stream).text();
+}
+
+export default async (req) => {
+  const url = new URL(req.url);
+  const api = url.searchParams.get("api");
+
+  if (!api) return new Response(HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+  if (!(await authed(req))) return json(401, { error: "unauthorized" });
+
+  try {
+    if (api === "summary") {
+      const [devs, iss, apps] = await Promise.all([
+        supabase.from("devices").select("*", { count: "exact", head: true }),
+        supabase.from("issues").select("*", { count: "exact", head: true }).eq("status", "open"),
+        supabase.from("devices").select("app_id"),
+      ]);
+      const appList = [...new Set((apps.data ?? []).map((r) => r.app_id ?? "default"))].sort();
+      return json(200, { devices: devs.count ?? 0, openIssues: iss.count ?? 0, apps: appList });
+    }
+
+    if (api === "devices") {
+      const app = url.searchParams.get("app") ?? "";
+      const q = url.searchParams.get("q") ?? "";
+      let query = supabase.from("devices")
+        .select("install_id,app_id,package_name,device_label,manufacturer,model,sdk_int,app_version,plugin_version,last_seen,log_level,pull_requested,sampled,killed,bytes_today")
+        .order("last_seen", { ascending: false }).limit(500);
+      if (app) query = query.eq("app_id", app);
+      if (q) query = query.ilike("device_label", "%" + q + "%");
+      const { data, error } = await query;
+      if (error) throw error;
+      return json(200, { devices: data ?? [] });
+    }
+
+    if (api === "device") {
+      const install = url.searchParams.get("install") ?? "";
+      const [dev, inc, hb] = await Promise.all([
+        supabase.from("devices")
+          .select("install_id,app_id,package_name,device_label,manufacturer,model,sdk_int,app_version,plugin_version,first_seen,last_seen,log_level,pull_requested,sampled,killed,budget_kb,bytes_today")
+          .eq("install_id", install).maybeSingle(),
+        supabase.from("incidents")
+          .select("id,kind,fingerprint,call_id,device_ts,server_ts,clock_offset_ms,payload_path")
+          .eq("install_id", install).order("server_ts", { ascending: false }).limit(100),
+        supabase.from("heartbeats")
+          .select("day,counters,fingerprints,received_at")
+          .eq("install_id", install).order("day", { ascending: false }).limit(14),
+      ]);
+      if (!dev.data) return json(404, { error: "no such device" });
+      const fps = [...new Set((inc.data ?? []).map((r) => r.fingerprint).filter(Boolean))];
+      let byFp = {};
+      if (fps.length) {
+        const { data: issues } = await supabase.from("issues")
+          .select("fingerprint,incident_type,codepoint,degradations").in("fingerprint", fps);
+        byFp = Object.fromEntries((issues ?? []).map((i) => [i.fingerprint, i]));
+      }
+      const incidents = (inc.data ?? []).map((r) => ({ ...r, issue: byFp[r.fingerprint] ?? null }));
+      return json(200, { device: dev.data, incidents, heartbeats: hb.data ?? [] });
+    }
+
+    if (api === "issues") {
+      const app = url.searchParams.get("app") ?? "";
+      let fpFilter = null;
+      if (app) {
+        const { data: appDevs } = await supabase.from("devices").select("install_id").eq("app_id", app);
+        const ids = (appDevs ?? []).map((d) => d.install_id);
+        const { data: id2 } = await supabase.from("issue_devices").select("fingerprint").in("install_id", ids);
+        fpFilter = [...new Set((id2 ?? []).map((r) => r.fingerprint))];
+      }
+      let query = supabase.from("issues")
+        .select("fingerprint,incident_type,codepoint,degradations,device_count,occurrence_count,status,first_seen,last_seen")
+        .order("device_count", { ascending: false }).order("occurrence_count", { ascending: false }).limit(200);
+      if (fpFilter) query = query.in("fingerprint", fpFilter.length ? fpFilter : ["__none__"]);
+      const { data, error } = await query;
+      if (error) throw error;
+      return json(200, { issues: data ?? [] });
+    }
+
+    if (api === "payload") {
+      const path = url.searchParams.get("path") ?? "";
+      if (!/^(incidents|pulls)\/[A-Za-z0-9\-/.]+\.gz$/.test(path)) return json(400, { error: "bad path" });
+      const { data, error } = await supabase.storage.from("ringkit-logs").download(path);
+      if (error || !data) return json(404, { error: "no payload" });
+      const text = await gunzipText(new Uint8Array(await data.arrayBuffer()));
+      const records = text.split("\n").filter((l) => l.trim()).map((l) => {
+        try { return JSON.parse(l); } catch { return { _raw: l }; }
+      });
+      return json(200, { records });
+    }
+
+    if (api === "knob" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const install = body.install ?? "";
+      const patch = {};
+      if (typeof body.log_level === "string" && LEVELS.includes(body.log_level)) patch.log_level = body.log_level;
+      if (typeof body.pull_requested === "boolean") patch.pull_requested = body.pull_requested;
+      if (!install || !Object.keys(patch).length) return json(400, { error: "nothing to set" });
+      const { error } = await supabase.from("devices").update(patch).eq("install_id", install);
+      if (error) throw error;
+      return json(200, { ok: true, applied: patch });
+    }
+
+    return json(400, { error: "unknown api" });
+  } catch (e) {
+    console.error("dashboard error:", e && e.message ? e.message : e);
+    return json(500, { error: "internal" });
+  }
+};
+
+// ── single-page dashboard (vanilla JS, event-delegated; the embedded client
+//    script uses no backticks / ${} so this template literal needs no escaping) ─
+const HTML = `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ringkit fleet</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--fg:#e6edf3;--dim:#8b949e;--accent:#2f81f7;--red:#f85149;--amber:#d29922;--green:#3fb950}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;gap:12px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+  header h1{font-size:15px;margin:0;font-weight:600}header h1 span{color:var(--dim);font-weight:400}
+  .grow{flex:1}
+  select,input,button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit}
+  button{cursor:pointer}button:hover{border-color:var(--accent)}
+  .tabs button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  main{padding:16px;max-width:1400px;margin:0 auto}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--dim);font-weight:600}
+  tbody tr{cursor:pointer}tbody tr:hover{background:var(--panel)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+  .pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;border:1px solid var(--line)}
+  .pill.verbose{color:var(--amber);border-color:var(--amber)}
+  .pill.killed{color:var(--red);border-color:var(--red)}
+  .pill.pull{color:var(--accent);border-color:var(--accent)}
+  .dim{color:var(--dim)}
+  .drawer{position:fixed;top:0;right:0;height:100%;width:min(760px,94vw);background:var(--panel);border-left:1px solid var(--line);transform:translateX(100%);transition:.18s;overflow:auto;z-index:20;padding:18px}
+  .drawer.open{transform:none}
+  .drawer h2{margin:.4em 0 .2em;font-size:16px}
+  .kv{display:grid;grid-template-columns:130px 1fr;gap:2px 10px;margin:10px 0;font-size:13px}
+  .kv div:nth-child(odd){color:var(--dim)}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
+  .close{position:absolute;top:12px;right:14px;font-size:22px;background:none;border:none;color:var(--dim)}
+  pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px;overflow:auto;font-size:11.5px;max-height:52vh}
+  .rec{border-bottom:1px solid var(--line);padding:4px 0}.rec .lvl{display:inline-block;width:58px}
+  .ERROR{color:var(--red)}.INFO{color:var(--green)}.VERBOSE{color:var(--dim)}
+  .gate{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:50}
+  .gate form{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:24px;width:320px;text-align:center}
+  .gate h1{font-size:16px}.gate input{width:100%;margin:10px 0}
+  .empty{color:var(--dim);padding:30px;text-align:center}.err{color:var(--red)}
+</style></head><body>
+
+<div class="gate" id="gate"><form id="loginForm">
+  <h1>ringkit fleet</h1><p class="dim">Enter the dashboard password</p>
+  <input id="pw" type="password" autofocus autocomplete="current-password" placeholder="password">
+  <button type="submit">Sign in</button><p class="err" id="loginErr"></p>
+</form></div>
+
+<header style="display:none" id="hdr">
+  <h1>ringkit fleet <span id="counts"></span></h1>
+  <div class="tabs"><button class="on" data-act="tab" data-tab="devices">Devices</button>
+    <button data-act="tab" data-tab="issues">Issues</button></div>
+  <select id="appFilter"></select>
+  <input id="search" placeholder="search label...">
+  <div class="grow"></div>
+  <button data-act="refresh">Refresh</button>
+  <button class="dim" data-act="logout">Sign out</button>
+</header>
+<main id="main" style="display:none"><div class="empty">Loading...</div></main>
+<div class="drawer" id="drawer"><button class="close" data-act="close">&times;</button><div id="drawerBody"></div></div>
+
+<script>
+var KEY=null,TAB='devices',tmr=null;
+function el(id){return document.getElementById(id)}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+function api(name,opts){opts=opts||{};opts.headers=Object.assign({'x-dashboard-key':KEY},opts.headers||{});
+  return fetch('?api='+name+(opts.qs||''),opts).then(function(r){if(r.status===401){logout();throw new Error('unauthorized')}return r.json()})}
+function ago(ts){if(!ts)return '-';var s=(Date.now()-new Date(ts).getTime())/1000;if(s<60)return Math.round(s)+'s';if(s<3600)return Math.round(s/60)+'m';if(s<86400)return Math.round(s/3600)+'h';return Math.round(s/86400)+'d'}
+function kb(b){return Math.round((b||0)/1024*10)/10+' KB'}
+
+el('loginForm').addEventListener('submit',function(e){e.preventDefault();KEY=el('pw').value;
+  api('summary').then(function(d){sessionStorage.setItem('dk',KEY);boot(d)})
+   .catch(function(){el('loginErr').textContent='Wrong password';KEY=null})});
+function logout(){sessionStorage.removeItem('dk');location.reload()}
+function boot(d){el('gate').style.display='none';el('hdr').style.display='flex';el('main').style.display='block';
+  el('counts').textContent='- '+d.devices+' devices - '+d.openIssues+' open issues';
+  el('appFilter').innerHTML='<option value="">all apps</option>'+d.apps.map(function(a){return '<option>'+esc(a)+'</option>'}).join('');
+  reload()}
+function qstr(){var a=el('appFilter').value,q=el('search').value,s=[];
+  if(a)s.push('app='+encodeURIComponent(a));if(q)s.push('q='+encodeURIComponent(q));return s.length?'&'+s.join('&'):''}
+function reload(){var m=el('main');m.innerHTML='<div class="empty">Loading...</div>';
+  if(TAB==='devices')api('devices',{qs:qstr()}).then(renderDevices).catch(function(e){m.innerHTML='<div class="empty err">'+esc(e.message)+'</div>'});
+  else api('issues',{qs:qstr()}).then(renderIssues)}
+
+function renderDevices(d){var r=d.devices;if(!r.length){el('main').innerHTML='<div class="empty">No devices</div>';return}
+  var t='<table><thead><tr><th>App</th><th>Label</th><th>Device</th><th>SDK</th><th>App ver</th><th>Last seen</th><th>Level</th><th>Flags</th><th>Today</th></tr></thead><tbody>';
+  r.forEach(function(x){t+='<tr data-act="device" data-install="'+esc(x.install_id)+'">'+
+    '<td>'+esc(x.app_id)+'</td><td>'+esc(x.device_label)+'</td><td class="dim">'+esc(x.manufacturer)+' '+esc(x.model)+'</td>'+
+    '<td>'+esc(x.sdk_int)+'</td><td>'+esc(x.app_version)+'</td><td>'+ago(x.last_seen)+' ago</td>'+
+    '<td><span class="pill '+(x.log_level==='verbose'?'verbose':'')+'">'+esc(x.log_level)+'</span></td>'+
+    '<td>'+(x.pull_requested?'<span class="pill pull">pull</span> ':'')+(x.killed?'<span class="pill killed">killed</span>':'')+'</td>'+
+    '<td class="dim">'+kb(x.bytes_today)+'</td></tr>'});
+  el('main').innerHTML=t+'</tbody></table>'}
+
+function renderIssues(d){var r=d.issues;if(!r.length){el('main').innerHTML='<div class="empty">No issues</div>';return}
+  var t='<table><thead><tr><th>Type</th><th>Codepoint</th><th>Degradations</th><th>Devices</th><th>Occurrences</th><th>Status</th><th>Last seen</th></tr></thead><tbody>';
+  r.forEach(function(x){t+='<tr><td>'+esc(x.incident_type)+'</td><td class="mono">'+esc(x.codepoint)+'</td>'+
+    '<td class="dim">'+esc((x.degradations||[]).join(', '))+'</td><td>'+esc(x.device_count)+'</td>'+
+    '<td>'+esc(x.occurrence_count)+'</td><td>'+esc(x.status)+'</td><td>'+ago(x.last_seen)+' ago</td></tr>'});
+  el('main').innerHTML=t+'</tbody></table>'}
+
+function openDevice(id){var b=el('drawerBody');b.innerHTML='<div class="empty">Loading...</div>';el('drawer').classList.add('open');
+  api('device',{qs:'&install='+encodeURIComponent(id)}).then(function(d){var v=d.device;
+    var s='<h2>'+esc(v.device_label)+'</h2><div class="kv">'+
+      '<div>app_id</div><div>'+esc(v.app_id)+'</div><div>package</div><div class="mono">'+esc(v.package_name||'-')+'</div>'+
+      '<div>install_id</div><div class="mono">'+esc(v.install_id)+'</div>'+
+      '<div>device</div><div>'+esc(v.manufacturer)+' '+esc(v.model)+' - SDK '+esc(v.sdk_int)+'</div>'+
+      '<div>app / plugin</div><div>'+esc(v.app_version)+' / '+esc(v.plugin_version)+'</div>'+
+      '<div>first / last</div><div>'+ago(v.first_seen)+' ago / '+ago(v.last_seen)+' ago</div>'+
+      '<div>budget today</div><div>'+kb(v.bytes_today)+' / '+esc(v.budget_kb)+' KB</div></div>';
+    s+='<div class="row"><span class="dim">capture level</span> <select data-act="level" data-install="'+esc(v.install_id)+'">'+
+      ['none','error','info','verbose'].map(function(l){return '<option'+(l===v.log_level?' selected':'')+'>'+l+'</option>'}).join('')+'</select>'+
+      '<button data-act="pull" data-install="'+esc(v.install_id)+'">'+(v.pull_requested?'pull requested':'Request full buffer')+'</button>'+
+      (v.killed?'<span class="pill killed">telemetry killed</span>':'')+'</div>';
+    s+='<h2>Incidents <span class="dim">('+d.incidents.length+')</span></h2>';
+    if(!d.incidents.length)s+='<div class="dim">none - healthy</div>';
+    else{s+='<table><thead><tr><th>When</th><th>Type</th><th>Codepoint</th><th>Call</th><th></th></tr></thead><tbody>';
+      d.incidents.forEach(function(i){var it=i.issue||{};
+        s+='<tr><td>'+ago(i.server_ts)+' ago</td><td>'+esc(i.kind==='pull'?'pull':(it.incident_type||i.kind))+'</td>'+
+        '<td class="mono">'+esc(it.codepoint||'')+'</td><td class="mono dim">'+esc(i.call_id||'')+'</td>'+
+        '<td><button data-act="payload" data-path="'+esc(encodeURIComponent(i.payload_path))+'">log</button></td></tr>'});
+      s+='</tbody></table>'}
+    if(d.heartbeats.length)s+='<h2>Latest heartbeat <span class="dim">'+esc(d.heartbeats[0].day)+'</span></h2><pre>'+esc(JSON.stringify(d.heartbeats[0].counters,null,1))+'</pre>';
+    b.innerHTML=s})}
+
+function viewPayload(p){var b=el('drawerBody'),back=b.innerHTML;b.innerHTML='<button data-act="back">&larr; back</button><div class="empty">Decompressing...</div>';
+  window.__back=back;
+  api('payload',{qs:'&path='+p}).then(function(d){
+    var o='<button data-act="back">&larr; back</button><h2>Black-box log <span class="dim">('+d.records.length+' records)</span></h2>';
+    d.records.forEach(function(r){o+='<div class="rec"><span class="lvl '+esc(r.level)+'">'+esc(r.level||'')+'</span> '+
+      '<span class="dim mono">'+esc(r.tag||'')+'</span> '+esc(r.event||r._raw||'')+
+      (r.data?' <span class="dim mono">'+esc(JSON.stringify(r.data))+'</span>':'')+(r.stack?'<pre>'+esc(r.stack)+'</pre>':'')+'</div>'});
+    b.innerHTML=o})}
+
+function toast(m){var t=document.createElement('div');t.textContent=m;
+  t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#2f81f7;color:#fff;padding:8px 16px;border-radius:6px;z-index:60';
+  document.body.appendChild(t);setTimeout(function(){t.remove()},1800)}
+
+// One delegated click handler for the whole app.
+document.addEventListener('click',function(e){var t=e.target.closest('[data-act]');if(!t)return;var act=t.getAttribute('data-act');
+  if(act==='tab'){TAB=t.getAttribute('data-tab');document.querySelectorAll('.tabs button').forEach(function(b){b.className=b===t?'on':''});reload()}
+  else if(act==='refresh')reload();
+  else if(act==='logout')logout();
+  else if(act==='device')openDevice(t.getAttribute('data-install'));
+  else if(act==='close')el('drawer').classList.remove('open');
+  else if(act==='payload'){e.stopPropagation();viewPayload(t.getAttribute('data-path'))}
+  else if(act==='back')el('drawerBody').innerHTML=window.__back;
+  else if(act==='pull'){var id=t.getAttribute('data-install');
+    api('knob',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({install:id,pull_requested:true})}).then(function(){toast('full-buffer pull requested');openDevice(id)})}});
+document.addEventListener('change',function(e){var t=e.target.closest('[data-act="level"]');if(!t)return;
+  api('knob',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({install:t.getAttribute('data-install'),log_level:t.value})}).then(function(){toast('level -> '+t.value)})});
+var si;el('search').addEventListener('input',function(){clearTimeout(si);si=setTimeout(reload,250)});
+el('appFilter').addEventListener('change',reload);
+
+var saved=sessionStorage.getItem('dk');
+if(saved){KEY=saved;api('summary').then(boot).catch(function(){sessionStorage.removeItem('dk')})}
+</script></body></html>`;
