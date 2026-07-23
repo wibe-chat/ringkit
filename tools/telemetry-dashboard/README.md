@@ -10,6 +10,9 @@ the service role — so the powerful key stays server-side and never reaches the
 It deliberately does **not** expose the fleet API keys, device tokens, or the kill
 switch (kill stays an admin action in Supabase Studio).
 
+The function is **zero-dependency** (it talks to Supabase over plain REST with `fetch`),
+so it deploys by drag-and-drop with no build step.
+
 ## What you need
 
 - A **Netlify account** (free tier is fine).
@@ -17,31 +20,28 @@ switch (kill stays an admin action in Supabase Studio).
   API → Project API keys → `service_role` → Reveal*. This is secret (full DB access);
   it only ever lives in Netlify's server-side environment.
 
-## Deploy (Netlify CLI — quickest)
+## Deploy (drag-and-drop a zip — no CLI)
+
+1. Zip **the contents** of this folder (so `netlify.toml` is at the zip root):
+   `netlify.toml`, `netlify/`, `public/`, `package.json`.
+   (Or run `tools/telemetry-dashboard/make-zip.sh` — it writes `ringkit-dashboard-netlify.zip`.)
+2. Netlify → *Sites* → drag the zip onto the **"Deploy manually / drag and drop"** area.
+   Netlify creates a site and deploys the function (nothing to install — zero deps).
+3. Open the new site → *Site configuration → Environment variables* → add:
+   - `SUPABASE_URL` = `https://nqfqrdkcgibeqlpmpnko.supabase.co`
+   - `SUPABASE_SERVICE_ROLE_KEY` = your Supabase **service_role** key
+4. **Redeploy once** (Deploys → *Trigger deploy*, or re-drop the zip) so the function
+   picks up the new environment variables.
+
+## Deploy (Netlify CLI — alternative)
 
 ```bash
 cd tools/telemetry-dashboard
-npm install
-npx netlify-cli login                 # opens a browser once
-npx netlify-cli deploy --build --prod # creates/links a site and deploys
-```
-
-Then set the two environment variables (Netlify UI → *Site configuration → Environment
-variables*, or the CLI below) and redeploy:
-
-```bash
+npx netlify-cli login
 npx netlify-cli env:set SUPABASE_URL "https://nqfqrdkcgibeqlpmpnko.supabase.co"
 npx netlify-cli env:set SUPABASE_SERVICE_ROLE_KEY "<your service_role key>"
-npx netlify-cli deploy --build --prod
+npx netlify-cli deploy --prod
 ```
-
-## Deploy (Netlify UI — from Git)
-
-1. Push this repo to GitHub (or connect it).
-2. Netlify → *Add new site → Import an existing project* → pick the repo.
-3. Set **Base directory** to `tools/telemetry-dashboard`.
-4. Add the two environment variables above under *Environment variables*.
-5. Deploy. Netlify installs `@supabase/supabase-js` and serves the function.
 
 ## Signing in
 

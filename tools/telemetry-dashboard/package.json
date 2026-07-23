@@ -3,8 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Read/debug dashboard for the ringkit fleet telemetry backend (Netlify Functions).",
-  "dependencies": {
-    "@supabase/supabase-js": "^2.45.0"
-  }
+  "description": "Zero-dependency read/debug dashboard for the ringkit fleet telemetry backend (Netlify Function).",
+  "dependencies": {}
 }

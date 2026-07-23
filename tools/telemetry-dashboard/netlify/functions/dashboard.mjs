@@ -1,34 +1,47 @@
 // ringkit fleet telemetry — read/debug dashboard (Netlify Function, Node).
 //
-// One self-contained function serves the HTML dashboard AND its JSON API. It
-// reads every telemetry table with the Supabase SERVICE ROLE (the tables are
-// deny-all RLS, so only this — or Studio — can see them). Hand the deployed
+// One self-contained, ZERO-DEPENDENCY function serves the HTML dashboard AND its
+// JSON API (so it deploys by drag-and-drop with no build step). It reads every
+// telemetry table over Supabase's REST API with the SERVICE ROLE key (the tables
+// are deny-all RLS, so only this — or Studio — can see them). Hand the deployed
 // URL + the dashboard password to developers: they browse devices across ALL
 // apps, read the decompressed black-box log per incident, and trigger the two
 // SAFE debug knobs (raise capture level, request a full-buffer pull).
 //
-// It never exposes the fleet api keys, the device tokens, or the kill switch.
+// It never exposes the fleet api keys, device tokens, or the kill switch.
 // Auth: every /?api=... call must carry `x-dashboard-key: <password>` (stored
 // server-side in fleet_config key='dashboard_password').
 //
-// Env (set in Netlify → Site settings → Environment variables):
+// Env (Netlify → Site configuration → Environment variables):
 //   SUPABASE_URL                — https://<ref>.supabase.co
 //   SUPABASE_SERVICE_ROLE_KEY   — Supabase → Settings → API → service_role (secret)
 
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-);
-
+const SB = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+const SR = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const AUTH = { apikey: SR, Authorization: "Bearer " + SR };
 const LEVELS = ["none", "error", "info", "verbose"];
 
 function json(status, body) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
+  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+}
+
+// PostgREST query → parsed JSON array (or null). opts: {method, body, headers}.
+async function rest(pathAndQuery, opts = {}) {
+  const r = await fetch(SB + "/rest/v1/" + pathAndQuery, {
+    method: opts.method || "GET",
+    headers: Object.assign({}, AUTH, opts.headers || {}),
+    body: opts.body,
   });
+  if (!r.ok && r.status !== 206) throw new Error("rest " + r.status + " " + pathAndQuery);
+  const text = await r.text();
+  return text ? JSON.parse(text) : null;
+}
+
+// Exact row count via the Content-Range header (Prefer: count=exact).
+async function count(pathAndQuery) {
+  const r = await fetch(SB + "/rest/v1/" + pathAndQuery, { headers: Object.assign({ Prefer: "count=exact" }, AUTH) });
+  const cr = r.headers.get("content-range") || "*/0";
+  return parseInt(cr.split("/")[1] || "0", 10) || 0;
 }
 
 function safeEqual(a, b) {
@@ -40,8 +53,8 @@ function safeEqual(a, b) {
 
 async function authed(req) {
   const key = req.headers.get("x-dashboard-key") ?? "";
-  const { data } = await supabase.from("fleet_config").select("value").eq("key", "dashboard_password").maybeSingle();
-  const pw = data?.value ?? "";
+  const rows = await rest("fleet_config?select=value&key=eq.dashboard_password&limit=1");
+  const pw = (rows && rows[0] && rows[0].value) || "";
   return !!pw && !!key && safeEqual(key, pw);
 }
 
@@ -50,86 +63,74 @@ async function gunzipText(bytes) {
   return await new Response(stream).text();
 }
 
+const enc = encodeURIComponent;
+
 export default async (req) => {
   const url = new URL(req.url);
   const api = url.searchParams.get("api");
 
   if (!api) return new Response(HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+  if (!SB || !SR) return json(500, { error: "server not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)" });
   if (!(await authed(req))) return json(401, { error: "unauthorized" });
 
   try {
     if (api === "summary") {
-      const [devs, iss, apps] = await Promise.all([
-        supabase.from("devices").select("*", { count: "exact", head: true }),
-        supabase.from("issues").select("*", { count: "exact", head: true }).eq("status", "open"),
-        supabase.from("devices").select("app_id"),
+      const [devices, openIssues, apps] = await Promise.all([
+        count("devices?select=install_id&limit=1"),
+        count("issues?select=fingerprint&status=eq.open&limit=1"),
+        rest("devices?select=app_id"),
       ]);
-      const appList = [...new Set((apps.data ?? []).map((r) => r.app_id ?? "default"))].sort();
-      return json(200, { devices: devs.count ?? 0, openIssues: iss.count ?? 0, apps: appList });
+      const appList = [...new Set((apps || []).map((r) => r.app_id ?? "default"))].sort();
+      return json(200, { devices, openIssues, apps: appList });
     }
 
     if (api === "devices") {
       const app = url.searchParams.get("app") ?? "";
       const q = url.searchParams.get("q") ?? "";
-      let query = supabase.from("devices")
-        .select("install_id,app_id,package_name,device_label,manufacturer,model,sdk_int,app_version,plugin_version,last_seen,log_level,pull_requested,sampled,killed,bytes_today")
-        .order("last_seen", { ascending: false }).limit(500);
-      if (app) query = query.eq("app_id", app);
-      if (q) query = query.ilike("device_label", "%" + q + "%");
-      const { data, error } = await query;
-      if (error) throw error;
-      return json(200, { devices: data ?? [] });
+      let qs = "devices?select=install_id,app_id,package_name,device_label,manufacturer,model,sdk_int,app_version,plugin_version,last_seen,log_level,pull_requested,sampled,killed,bytes_today&order=last_seen.desc&limit=500";
+      if (app) qs += "&app_id=eq." + enc(app);
+      if (q) qs += "&device_label=ilike.*" + enc(q) + "*";
+      return json(200, { devices: (await rest(qs)) || [] });
     }
 
     if (api === "device") {
-      const install = url.searchParams.get("install") ?? "";
+      const id = url.searchParams.get("install") ?? "";
       const [dev, inc, hb] = await Promise.all([
-        supabase.from("devices")
-          .select("install_id,app_id,package_name,device_label,manufacturer,model,sdk_int,app_version,plugin_version,first_seen,last_seen,log_level,pull_requested,sampled,killed,budget_kb,bytes_today")
-          .eq("install_id", install).maybeSingle(),
-        supabase.from("incidents")
-          .select("id,kind,fingerprint,call_id,device_ts,server_ts,clock_offset_ms,payload_path")
-          .eq("install_id", install).order("server_ts", { ascending: false }).limit(100),
-        supabase.from("heartbeats")
-          .select("day,counters,fingerprints,received_at")
-          .eq("install_id", install).order("day", { ascending: false }).limit(14),
+        rest("devices?select=install_id,app_id,package_name,device_label,manufacturer,model,sdk_int,app_version,plugin_version,first_seen,last_seen,log_level,pull_requested,sampled,killed,budget_kb,bytes_today&install_id=eq." + enc(id) + "&limit=1"),
+        rest("incidents?select=id,kind,fingerprint,call_id,device_ts,server_ts,clock_offset_ms,payload_path&install_id=eq." + enc(id) + "&order=server_ts.desc&limit=100"),
+        rest("heartbeats?select=day,counters,fingerprints,received_at&install_id=eq." + enc(id) + "&order=day.desc&limit=14"),
       ]);
-      if (!dev.data) return json(404, { error: "no such device" });
-      const fps = [...new Set((inc.data ?? []).map((r) => r.fingerprint).filter(Boolean))];
+      if (!dev || !dev[0]) return json(404, { error: "no such device" });
+      const fps = [...new Set((inc || []).map((r) => r.fingerprint).filter(Boolean))];
       let byFp = {};
       if (fps.length) {
-        const { data: issues } = await supabase.from("issues")
-          .select("fingerprint,incident_type,codepoint,degradations").in("fingerprint", fps);
-        byFp = Object.fromEntries((issues ?? []).map((i) => [i.fingerprint, i]));
+        const issues = await rest("issues?select=fingerprint,incident_type,codepoint,degradations&fingerprint=in.(" + fps.map(enc).join(",") + ")");
+        byFp = Object.fromEntries((issues || []).map((i) => [i.fingerprint, i]));
       }
-      const incidents = (inc.data ?? []).map((r) => ({ ...r, issue: byFp[r.fingerprint] ?? null }));
-      return json(200, { device: dev.data, incidents, heartbeats: hb.data ?? [] });
+      const incidents = (inc || []).map((r) => ({ ...r, issue: byFp[r.fingerprint] ?? null }));
+      return json(200, { device: dev[0], incidents, heartbeats: hb || [] });
     }
 
     if (api === "issues") {
       const app = url.searchParams.get("app") ?? "";
       let fpFilter = null;
       if (app) {
-        const { data: appDevs } = await supabase.from("devices").select("install_id").eq("app_id", app);
-        const ids = (appDevs ?? []).map((d) => d.install_id);
-        const { data: id2 } = await supabase.from("issue_devices").select("fingerprint").in("install_id", ids);
-        fpFilter = [...new Set((id2 ?? []).map((r) => r.fingerprint))];
+        const appDevs = await rest("devices?select=install_id&app_id=eq." + enc(app));
+        const ids = (appDevs || []).map((d) => d.install_id);
+        const id2 = ids.length ? await rest("issue_devices?select=fingerprint&install_id=in.(" + ids.map(enc).join(",") + ")") : [];
+        fpFilter = [...new Set((id2 || []).map((r) => r.fingerprint))];
       }
-      let query = supabase.from("issues")
-        .select("fingerprint,incident_type,codepoint,degradations,device_count,occurrence_count,status,first_seen,last_seen")
-        .order("device_count", { ascending: false }).order("occurrence_count", { ascending: false }).limit(200);
-      if (fpFilter) query = query.in("fingerprint", fpFilter.length ? fpFilter : ["__none__"]);
-      const { data, error } = await query;
-      if (error) throw error;
-      return json(200, { issues: data ?? [] });
+      let qs = "issues?select=fingerprint,incident_type,codepoint,degradations,device_count,occurrence_count,status,first_seen,last_seen&order=device_count.desc,occurrence_count.desc&limit=200";
+      if (fpFilter) qs += "&fingerprint=in.(" + (fpFilter.length ? fpFilter.map(enc).join(",") : "__none__") + ")";
+      return json(200, { issues: (await rest(qs)) || [] });
     }
 
     if (api === "payload") {
       const path = url.searchParams.get("path") ?? "";
       if (!/^(incidents|pulls)\/[A-Za-z0-9\-/.]+\.gz$/.test(path)) return json(400, { error: "bad path" });
-      const { data, error } = await supabase.storage.from("ringkit-logs").download(path);
-      if (error || !data) return json(404, { error: "no payload" });
-      const text = await gunzipText(new Uint8Array(await data.arrayBuffer()));
+      const r = await fetch(SB + "/storage/v1/object/ringkit-logs/" + path, { headers: AUTH });
+      if (!r.ok) return json(404, { error: "no payload" });
+      const text = await gunzipText(new Uint8Array(await r.arrayBuffer()));
       const records = text.split("\n").filter((l) => l.trim()).map((l) => {
         try { return JSON.parse(l); } catch { return { _raw: l }; }
       });
@@ -138,13 +139,16 @@ export default async (req) => {
 
     if (api === "knob" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
-      const install = body.install ?? "";
+      const id = body.install ?? "";
       const patch = {};
       if (typeof body.log_level === "string" && LEVELS.includes(body.log_level)) patch.log_level = body.log_level;
       if (typeof body.pull_requested === "boolean") patch.pull_requested = body.pull_requested;
-      if (!install || !Object.keys(patch).length) return json(400, { error: "nothing to set" });
-      const { error } = await supabase.from("devices").update(patch).eq("install_id", install);
-      if (error) throw error;
+      if (!id || !Object.keys(patch).length) return json(400, { error: "nothing to set" });
+      await rest("devices?install_id=eq." + enc(id), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
+        body: JSON.stringify(patch),
+      });
       return json(200, { ok: true, applied: patch });
     }
 
@@ -218,7 +222,7 @@ const HTML = `<!doctype html>
 <div class="drawer" id="drawer"><button class="close" data-act="close">&times;</button><div id="drawerBody"></div></div>
 
 <script>
-var KEY=null,TAB='devices',tmr=null;
+var KEY=null,TAB='devices';
 function el(id){return document.getElementById(id)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
 function api(name,opts){opts=opts||{};opts.headers=Object.assign({'x-dashboard-key':KEY},opts.headers||{});
@@ -294,7 +298,6 @@ function toast(m){var t=document.createElement('div');t.textContent=m;
   t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#2f81f7;color:#fff;padding:8px 16px;border-radius:6px;z-index:60';
   document.body.appendChild(t);setTimeout(function(){t.remove()},1800)}
 
-// One delegated click handler for the whole app.
 document.addEventListener('click',function(e){var t=e.target.closest('[data-act]');if(!t)return;var act=t.getAttribute('data-act');
   if(act==='tab'){TAB=t.getAttribute('data-tab');document.querySelectorAll('.tabs button').forEach(function(b){b.className=b===t?'on':''});reload()}
   else if(act==='refresh')reload();
