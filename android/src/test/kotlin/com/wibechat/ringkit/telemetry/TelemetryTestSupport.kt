@@ -105,6 +105,7 @@ internal class EngineHarness(
             ringLog = ringLog,
             appLogLevel = { appLevel },
             appVersion = { "9.9.9" },
+            packageName = "com.example.host",
             config = config,
             state = state,
             transport = transport,

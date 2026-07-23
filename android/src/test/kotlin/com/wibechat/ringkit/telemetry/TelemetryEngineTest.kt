@@ -40,6 +40,17 @@ class TelemetryEngineTest {
     }
 
     @Test
+    fun `register device block carries the applicationId for multi-app segregation`() {
+        val h = EngineHarness()
+        assertEquals(TelemetryRun.OK, h.engine().runHeartbeat())
+        val register = h.transport.sent.first { it.payload.optString("kind") == "register" }.payload
+        assertEquals("com.example.host", register.getJSONObject("device").getString("package_name"))
+        // Also present on the heartbeat's device descriptor.
+        val heartbeat = h.transport.sent.first { it.payload.optString("kind") == "heartbeat" }.payload
+        assertEquals("com.example.host", heartbeat.getJSONObject("device").getString("package_name"))
+    }
+
+    @Test
     fun `401 re-registers once and retries — then backs off`() {
         val h = EngineHarness()
         h.state.deviceToken = "tok-stale"

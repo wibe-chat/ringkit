@@ -46,6 +46,7 @@ class TelemetryMockServerTest {
             ringLog = harness.ringLog,
             appLogLevel = { CoreLogLevel.ERROR },
             appVersion = { "9.9.9" },
+            packageName = "com.example.host",
             config = config,
             state = harness.state,
             transport = HttpCheckinTransport(),
