@@ -146,6 +146,7 @@ internal object Telemetry {
                             .getPackageInfo(core.appContext.packageName, 0).versionName
                     }.getOrNull() ?: "unknown"
                 },
+                packageName = core.appContext.packageName,
                 config = config,
                 state = state,
                 transport = transport,

@@ -36,6 +36,8 @@ internal class TelemetryEngine(
     /** The app config's logLevel — the sink level when no server override is set. */
     private val appLogLevel: () -> CoreLogLevel,
     private val appVersion: () -> String,
+    /** The host app's applicationId (§11.5 multi-app segregation). */
+    private val packageName: String,
     private val config: CoreTelemetryConfig,
     private val state: TelemetryState,
     private val transport: CheckinTransport,
@@ -322,6 +324,10 @@ internal class TelemetryEngine(
             .put("sdk_int", Build.VERSION.SDK_INT)
             .put("app_version", appVersion())
             .put("plugin_version", Telemetry.PLUGIN_VERSION)
+            // §11.5 multi-app: the applicationId. The server cross-checks it, but
+            // the AUTHORITATIVE app identity is the fleet key the app registered
+            // with (a client can't spoof its app by lying here).
+            .put("package_name", packageName)
 
     private fun register(): SendResult {
         val payload = baseRequest("register").put("device", deviceBlock())
