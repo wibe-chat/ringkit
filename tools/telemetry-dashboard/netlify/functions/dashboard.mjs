@@ -63,7 +63,16 @@ async function gunzipText(bytes) {
   return await new Response(stream).text();
 }
 
+// Strong random fleet key (48 hex chars) — Web Crypto, global on Node 18+/Netlify.
+function genKey() {
+  const b = new Uint8Array(24);
+  crypto.getRandomValues(b);
+  return Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+
 const enc = encodeURIComponent;
+
+const JSON_MIN = { "Content-Type": "application/json", Prefer: "return=minimal" };
 
 export default async (req) => {
   const url = new URL(req.url);
@@ -152,6 +161,57 @@ export default async (req) => {
       return json(200, { ok: true, applied: patch });
     }
 
+    // ── key management (internal — the password gate is the boundary) ──────
+    if (api === "keys") {
+      return json(200, { keys: (await rest("fleet_keys?select=api_key,app_id,label,active,created_at&order=created_at.desc")) || [] });
+    }
+
+    if (api === "keyCreate" && req.method === "POST") {
+      const b = await req.json().catch(() => ({}));
+      const app_id = (b.app_id || "").trim();
+      const label = (b.label || "").trim() || app_id;
+      if (!app_id) return json(400, { error: "app name required" });
+      const api_key = genKey();
+      const row = await rest("fleet_keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Prefer: "return=representation" },
+        body: JSON.stringify({ api_key, app_id, label, active: true }),
+      });
+      return json(200, { key: (row && row[0]) || { api_key, app_id, label, active: true } });
+    }
+
+    if (api === "keyRename" && req.method === "POST") {
+      const b = await req.json().catch(() => ({}));
+      const api_key = b.api_key || "";
+      const app_id = (b.app_id || "").trim();
+      const label = (b.label || "").trim() || app_id;
+      if (!api_key || !app_id) return json(400, { error: "app name required" });
+      const cur = await rest("fleet_keys?select=app_id&api_key=eq." + enc(api_key) + "&limit=1");
+      const oldApp = cur && cur[0] && cur[0].app_id;
+      await rest("fleet_keys?api_key=eq." + enc(api_key), { method: "PATCH", headers: JSON_MIN, body: JSON.stringify({ app_id, label }) });
+      // Cascade the rename onto this app's already-registered devices so the
+      // whole fleet re-labels at once (fleet_daily history self-heals on the
+      // next nightly roll-up).
+      if (oldApp && oldApp !== app_id) {
+        await rest("devices?app_id=eq." + enc(oldApp), { method: "PATCH", headers: JSON_MIN, body: JSON.stringify({ app_id }) });
+      }
+      return json(200, { ok: true });
+    }
+
+    if (api === "keyActive" && req.method === "POST") {
+      const b = await req.json().catch(() => ({}));
+      if (!b.api_key || typeof b.active !== "boolean") return json(400, { error: "bad request" });
+      await rest("fleet_keys?api_key=eq." + enc(b.api_key), { method: "PATCH", headers: JSON_MIN, body: JSON.stringify({ active: b.active }) });
+      return json(200, { ok: true });
+    }
+
+    if (api === "keyDelete" && req.method === "POST") {
+      const b = await req.json().catch(() => ({}));
+      if (!b.api_key) return json(400, { error: "bad request" });
+      await rest("fleet_keys?api_key=eq." + enc(b.api_key), { method: "DELETE", headers: { Prefer: "return=minimal" } });
+      return json(200, { ok: true });
+    }
+
     return json(400, { error: "unknown api" });
   } catch (e) {
     console.error("dashboard error:", e && e.message ? e.message : e);
@@ -211,7 +271,8 @@ const HTML = `<!doctype html>
 <header style="display:none" id="hdr">
   <h1>ringkit fleet <span id="counts"></span></h1>
   <div class="tabs"><button class="on" data-act="tab" data-tab="devices">Devices</button>
-    <button data-act="tab" data-tab="issues">Issues</button></div>
+    <button data-act="tab" data-tab="issues">Issues</button>
+    <button data-act="tab" data-tab="keys">Keys</button></div>
   <select id="appFilter"></select>
   <input id="search" placeholder="search label...">
   <div class="grow"></div>
@@ -242,6 +303,7 @@ function qstr(){var a=el('appFilter').value,q=el('search').value,s=[];
   if(a)s.push('app='+encodeURIComponent(a));if(q)s.push('q='+encodeURIComponent(q));return s.length?'&'+s.join('&'):''}
 function reload(){var m=el('main');m.innerHTML='<div class="empty">Loading...</div>';
   if(TAB==='devices')api('devices',{qs:qstr()}).then(renderDevices).catch(function(e){m.innerHTML='<div class="empty err">'+esc(e.message)+'</div>'});
+  else if(TAB==='keys')api('keys').then(renderKeys).catch(function(e){m.innerHTML='<div class="empty err">'+esc(e.message)+'</div>'});
   else api('issues',{qs:qstr()}).then(renderIssues)}
 
 function renderDevices(d){var r=d.devices;if(!r.length){el('main').innerHTML='<div class="empty">No devices</div>';return}
@@ -259,6 +321,19 @@ function renderIssues(d){var r=d.issues;if(!r.length){el('main').innerHTML='<div
   r.forEach(function(x){t+='<tr><td>'+esc(x.incident_type)+'</td><td class="mono">'+esc(x.codepoint)+'</td>'+
     '<td class="dim">'+esc((x.degradations||[]).join(', '))+'</td><td>'+esc(x.device_count)+'</td>'+
     '<td>'+esc(x.occurrence_count)+'</td><td>'+esc(x.status)+'</td><td>'+ago(x.last_seen)+' ago</td></tr>'});
+  el('main').innerHTML=t+'</tbody></table>'}
+
+function renderKeys(d){var r=d.keys||[];
+  var t='<div class="row"><b>New key</b> <input id="nkApp" placeholder="app name (e.g. mallu-talks)"><input id="nkLabel" placeholder="note (optional)"><button data-act="keyCreate">+ Create key</button></div>'+
+    '<p class="dim" style="margin:0 0 8px">Give each app its own key. Paste the app name + key into that app in your telemetry config. Renaming an app cascades to its devices.</p>';
+  t+='<table><thead><tr><th>App name</th><th>Note</th><th>Key (click to select)</th><th>Active</th><th></th></tr></thead><tbody>';
+  if(!r.length)t+='<tr><td colspan="5" class="dim">no keys yet</td></tr>';
+  r.forEach(function(x){t+='<tr>'+
+    '<td>'+esc(x.app_id)+'</td><td class="dim">'+esc(x.label||'')+'</td>'+
+    '<td><span class="mono" style="user-select:all">'+esc(x.api_key)+'</span> <button data-act="keyCopy" data-key="'+esc(x.api_key)+'">copy</button></td>'+
+    '<td><button data-act="keyActive" data-key="'+esc(x.api_key)+'" data-next="'+(x.active?'0':'1')+'">'+(x.active?'on':'off')+'</button></td>'+
+    '<td><button data-act="keyRename" data-key="'+esc(x.api_key)+'" data-app="'+esc(x.app_id)+'" data-label="'+esc(x.label||'')+'">rename</button> '+
+    '<button data-act="keyDelete" data-key="'+esc(x.api_key)+'" data-app="'+esc(x.app_id)+'">delete</button></td></tr>'});
   el('main').innerHTML=t+'</tbody></table>'}
 
 function openDevice(id){var b=el('drawerBody');b.innerHTML='<div class="empty">Loading...</div>';el('drawer').classList.add('open');
@@ -307,7 +382,15 @@ document.addEventListener('click',function(e){var t=e.target.closest('[data-act]
   else if(act==='payload'){e.stopPropagation();viewPayload(t.getAttribute('data-path'))}
   else if(act==='back')el('drawerBody').innerHTML=window.__back;
   else if(act==='pull'){var id=t.getAttribute('data-install');
-    api('knob',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({install:id,pull_requested:true})}).then(function(){toast('full-buffer pull requested');openDevice(id)})}});
+    api('knob',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({install:id,pull_requested:true})}).then(function(){toast('full-buffer pull requested');openDevice(id)})}
+  else if(act==='keyCopy'){navigator.clipboard.writeText(t.getAttribute('data-key')).then(function(){toast('key copied')})}
+  else if(act==='keyCreate'){var na=el('nkApp').value.trim();if(!na){toast('enter an app name');return}
+    api('keyCreate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({app_id:na,label:el('nkLabel').value.trim()})}).then(function(){toast('key created');reload()})}
+  else if(act==='keyActive'){api('keyActive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:t.getAttribute('data-key'),active:t.getAttribute('data-next')==='1'})}).then(reload)}
+  else if(act==='keyRename'){var nn=prompt('New app name:',t.getAttribute('data-app'));if(nn==null)return;nn=nn.trim();if(!nn)return;
+    api('keyRename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:t.getAttribute('data-key'),app_id:nn,label:t.getAttribute('data-label')})}).then(function(){toast('renamed');reload()})}
+  else if(act==='keyDelete'){if(!confirm('Delete the key for "'+t.getAttribute('data-app')+'"? Devices already registered keep working; new installs of that app can no longer register.'))return;
+    api('keyDelete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:t.getAttribute('data-key')})}).then(function(){toast('deleted');reload()})}});
 document.addEventListener('change',function(e){var t=e.target.closest('[data-act="level"]');if(!t)return;
   api('knob',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({install:t.getAttribute('data-install'),log_level:t.value})}).then(function(){toast('level -> '+t.value)})});
 var si;el('search').addEventListener('input',function(){clearTimeout(si);si=setTimeout(reload,250)});
