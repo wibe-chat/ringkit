@@ -2,6 +2,7 @@ package com.wibechat.ringkit.diag
 
 import android.app.NotificationManager
 import android.content.Context
+import android.media.AudioManager
 import androidx.test.core.app.ApplicationProvider
 import com.wibechat.ringkit.core.IncomingCallOrchestrator
 import com.wibechat.ringkit.core.RingKitCore
@@ -112,6 +113,18 @@ class DiagnosticsTest {
         )
         core.store.writeBackgroundHandles(1L, 2L)
         assertFalse(findings().containsKey("backgroundHandlerUnregistered"))
+    }
+
+    @Test
+    fun normal_ringer_with_zero_ring_volume_reports_actionable_finding() {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+        audioManager.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
+        audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+
+        val finding = findings().getValue("ringVolumeZero")
+
+        assertEquals(DiagnosticsEngine.Severity.WARNING, finding.severity)
     }
 
     // ── §11.3 breadcrumbs ────────────────────────────────────────────────

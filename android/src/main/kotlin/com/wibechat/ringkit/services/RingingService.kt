@@ -27,6 +27,7 @@ import com.wibechat.ringkit.core.RingLog
 import com.wibechat.ringkit.core.CallActionReceiver
 import com.wibechat.ringkit.ui.CallNotificationFactory
 import com.wibechat.ringkit.ui.RingKitChannels
+import com.wibechat.ringkit.ui.RingAudioState
 import com.wibechat.ringkit.ui.RingtonePlayer
 
 /**
@@ -85,9 +86,23 @@ class RingingService : Service() {
             processPlayer?.let { return it }
             synchronized(this) {
                 processPlayer?.let { return it }
-                val created = RingtonePlayer(context.applicationContext, core.ringLog)
+                val created =
+                    RingtonePlayer(
+                        context.applicationContext,
+                        core.ringLog,
+                        postToOwner = { block -> core.writer.post(block) },
+                    )
                 processPlayer = created
                 return created
+            }
+        }
+
+        /** Tests only: release the process singleton before its owning writer is shut down. */
+        internal fun resetForTests() {
+            synchronized(this) {
+                processPlayer?.stop()
+                processPlayer = null
+                isRunning = false
             }
         }
     }
@@ -288,7 +303,14 @@ class RingingService : Service() {
         } else if (audioOwnerCallId != owner.callId) {
             audioOwnerCallId = owner.callId
             player.stop()
-            val outcome = player.start(owner, config.defaultRingtone, anyInCallState = false)
+            val ownerCallId = owner.callId
+            val outcome =
+                player.start(
+                    owner,
+                    config.defaultRingtone,
+                    anyInCallState = false,
+                    onAudioState = { state -> onAudioStateChanged(ownerCallId, state) },
+                )
             audioOwnerAudible = outcome.audible
             core.trace.trace(
                 "ring", owner.callId,
@@ -318,6 +340,18 @@ class RingingService : Service() {
                         "re-point failed", throwable = it,
                     )
                 }
+        }
+    }
+
+    /** Writer-confined callback from the serialized ringtone state machine. */
+    private fun onAudioStateChanged(expectedCallId: String, state: RingAudioState) {
+        if (audioOwnerCallId != expectedCallId) return
+        audioOwnerAudible = state is RingAudioState.Playing
+        core.trace.trace("ring", expectedCallId, "audio state: $state")
+        if (state !is RingAudioState.Playing) {
+            core.repository.callFor(expectedCallId)
+                ?.takeIf { it.state == CoreCallState.RINGING }
+                ?.let(::armNoAudioBackstop)
         }
     }
 

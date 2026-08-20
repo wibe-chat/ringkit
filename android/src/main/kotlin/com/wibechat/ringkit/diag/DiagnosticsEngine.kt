@@ -121,6 +121,17 @@ object DiagnosticsEngine {
                         "Informational.",
                     )
         }
+        if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL &&
+            (audioManager.getStreamVolume(AudioManager.STREAM_RING) == 0 ||
+                audioManager.isStreamMute(AudioManager.STREAM_RING))
+        ) {
+            findings +=
+                Finding(
+                    "ringVolumeZero", Severity.WARNING,
+                    "Ringer mode is NORMAL but the ring stream is muted or at zero volume — calls can vibrate without audible sound.",
+                    "Raise the device ring volume in system sound settings.",
+                )
+        }
         val filter = notificationManager.currentInterruptionFilter
         if (filter != NotificationManager.INTERRUPTION_FILTER_ALL &&
             filter != NotificationManager.INTERRUPTION_FILTER_UNKNOWN

@@ -4,8 +4,6 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
-import android.media.MediaPlayer
-import android.media.Ringtone
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
@@ -72,12 +70,15 @@ object RingPolicyResolver {
  * IRingtonePlayer — R37) → plugin-bundled raw resource as the failure rung.
  *
  * NO screen-off receiver, NO volume-change receiver (#827/#792), and
- * `AudioManager.mode` is NEVER touched (#416): stream volume 0 or focus loss
- * silences both engines without any state mutation on our side.
+ * `AudioManager.mode` is NEVER touched (#416). Playback failures advance the
+ * shared ladder; user volume/ringer policy is observed and never mutated.
  */
-class RingtonePlayer(
+internal class RingtonePlayer(
     private val context: Context,
     private val ringLog: RingLog,
+    private val backend: RingPlaybackBackend = AndroidRingPlaybackBackend(context),
+    private val scheduler: RingPlaybackScheduler = HandlerRingPlaybackScheduler(),
+    private val postToOwner: ((() -> Unit) -> Unit) = { it() },
 ) {
     data class RingOutcome(
         val audible: Boolean,
@@ -86,8 +87,20 @@ class RingtonePlayer(
         val resolution: String,
     )
 
-    private var mediaPlayer: MediaPlayer? = null
-    private var ringtone: Ringtone? = null
+    private enum class Rung { PRIMARY, RINGTONE, BUNDLED }
+
+    private var activeEngine: RingPlaybackEngine? = null
+    private var activeAttempt = 0L
+    private var generation = 0L
+    private var activeCallId: String? = null
+    private var activeSource: Uri? = null
+    private var nextRung: Rung? = null
+    private var stateListener: ((RingAudioState) -> Unit)? = null
+    private var verification: RingPlaybackCancellation? = null
+    private val attemptedRungs = mutableListOf<String>()
+    private var lastFailure = "none"
+    private var lastFocusResult = "notRequested"
+    private var audioSnapshot: Map<String, String> = emptyMap()
     private var focusRequest: AudioFocusRequest? = null
     private var vibrating = false
 
@@ -98,19 +111,28 @@ class RingtonePlayer(
             .build()
 
     /** Start ring per policy; safe to call once per owner call (stop() first when re-pointing). */
-    fun start(record: CallRecord, defaultRingtone: String?, anyInCallState: Boolean): RingOutcome {
+    @Synchronized
+    fun start(
+        record: CallRecord,
+        defaultRingtone: String?,
+        anyInCallState: Boolean,
+        onAudioState: ((RingAudioState) -> Unit)? = null,
+    ): RingOutcome {
         val personUri = record.info.handle?.let { "tel:$it" }
         val policy =
             RingPolicyResolver.resolve(context, record.options.vibrate, personUri, anyInCallState)
         ringLog.log(
             CoreLogLevel.INFO, "ring", "RingtonePlayer.start", record.callId, "policy",
-            mapOf("reason" to policy.reason, "sound" to policy.sound.toString(), "vibrate" to policy.vibrate.toString()),
+            mapOf("reason" to policy.reason, "sound" to policy.sound.toString(), "vibrate" to policy.vibrate.toString()) +
+                captureAudioSnapshot(),
         )
 
+        stateListener = onAudioState
         var engine: String? = null
         if (policy.sound) {
+            beginAudioSession(record.callId, resolveSource(record.callId, record.options.ringtone ?: defaultRingtone))
             requestFocus(record.callId)
-            engine = playLadder(record.callId, record.options.ringtone ?: defaultRingtone)
+            engine = advance(Rung.PRIMARY)
         }
         if (policy.vibrate) startVibration(record.callId)
 
@@ -152,12 +174,14 @@ class RingtonePlayer(
     }
 
     /** Volume-key silence (§8.4: exists ONLY via IncomingCallActivity.onKeyDown). */
+    @Synchronized
     fun silence(callId: String?) {
         ringLog.log(CoreLogLevel.INFO, "ring", "RingtonePlayer.silence", callId, "user_silenced")
         stopAudioOnly()
         stopVibration()
     }
 
+    @Synchronized
     fun stop() {
         stopAudioOnly()
         stopVibration()
@@ -165,74 +189,167 @@ class RingtonePlayer(
 
     // ── engine ladder ────────────────────────────────────────────────────
 
-    private fun playLadder(callId: String, source: String?): String? {
-        val resolved = resolveSource(callId, source)
+    private fun beginAudioSession(callId: String, source: Uri) {
+        generation++
+        releaseActiveEngine()
+        abandonFocus()
+        activeCallId = callId
+        activeSource = source
+        nextRung = null
+        attemptedRungs.clear()
+        lastFailure = "none"
+        lastFocusResult = "notRequested"
+        audioSnapshot = captureAudioSnapshot()
+    }
 
-        // Rung 1: MediaPlayer (uniform looping ≥26, focus integration).
-        try {
-            val player = MediaPlayer()
-            player.setAudioAttributes(ringAttributes)
-            player.setDataSource(context, resolved)
-            player.isLooping = true
-            player.setOnErrorListener { _, what, extra ->
-                ringLog.log(
-                    CoreLogLevel.ERROR, "ring", "RingtonePlayer.playLadder", callId,
-                    "MediaPlayer async error", mapOf("what" to "$what", "extra" to "$extra"),
-                )
-                true
-            }
-            player.prepare()
-            player.start()
-            mediaPlayer = player
-            return "MediaPlayer"
-        } catch (e: Exception) {
-            runCatching { mediaPlayer?.release() }
-            mediaPlayer = null
-            ringLog.log(
-                CoreLogLevel.INFO, "ring", "RingtonePlayer.playLadder", callId,
-                "MediaPlayer rung failed — trying Ringtone", mapOf("source" to resolved.toString()), e,
-            )
-        }
-
-        // Rung 2: Ringtone via IRingtonePlayer — reads content:// we cannot (R37).
-        // 26–27 cannot loop it (§8.8): skip straight to the loopable bundled default.
-        if (Build.VERSION.SDK_INT >= 28 && resolved.scheme == "content") {
+    private fun advance(first: Rung?): String? {
+        var rung = first
+        while (rung != null) {
+            val currentRung = rung
+            val callId = activeCallId ?: return null
+            val source = activeSource ?: return null
+            val currentGeneration = generation
+            val attempt = ++activeAttempt
+            var opened: RingPlaybackEngine? = null
+            attemptedRungs += currentRung.name.lowercase()
             try {
-                val tone = RingtoneManager.getRingtone(context, resolved)
-                if (tone != null) {
-                    tone.audioAttributes = ringAttributes
-                    tone.isLooping = true
-                    tone.play()
-                    ringtone = tone
-                    return "Ringtone"
+                opened =
+                    when (currentRung) {
+                        Rung.PRIMARY ->
+                            backend.openPrimary(source, ringAttributes) { what, extra ->
+                                handleAsyncError(currentGeneration, attempt, what, extra)
+                            }
+                        Rung.RINGTONE -> {
+                            if (Build.VERSION.SDK_INT < 28 || source.scheme != "content") null
+                            else backend.openRingtone(source, ringAttributes)
+                        }
+                        Rung.BUNDLED ->
+                            backend.openBundled(ringAttributes) { what, extra ->
+                                handleAsyncError(currentGeneration, attempt, what, extra)
+                            }
+                    }
+                if (opened == null) {
+                    rung = currentRung.after()
+                    continue
                 }
-            } catch (e: Exception) {
-                runCatching { ringtone?.stop() }
-                ringtone = null
+                opened.start()
+                releaseActiveEngine()
+                activeEngine = opened
+                activeAttempt = attempt
+                nextRung = currentRung.after()
+                emitState(RingAudioState.Playing(opened.name))
+                schedulePlaybackVerification(currentGeneration, attempt, opened, nextRung)
+                return activeEngine?.name
+            } catch (error: Throwable) {
+                runCatching { opened?.stop() }
+                lastFailure = "sync:${currentRung.name.lowercase()}:${error.javaClass.simpleName}"
                 ringLog.log(
-                    CoreLogLevel.INFO, "ring", "RingtonePlayer.playLadder", callId,
-                    "Ringtone rung failed — bundled default", emptyMap(), e,
+                    CoreLogLevel.INFO,
+                    "ring",
+                    "RingtonePlayer.advance",
+                    callId,
+                    "${currentRung.name.lowercase()} rung failed",
+                    mapOf("sourceKind" to sourceKind(source)),
+                    error,
                 )
+                rung = currentRung.after()
             }
+        }
+        val callId = activeCallId
+        releaseActiveEngine()
+        emitState(RingAudioState.Failed("everyRungFailed"))
+        ringLog.log(
+            CoreLogLevel.ERROR,
+            "ring",
+            "RingtonePlayer.advance",
+            callId,
+            "every rung failed — silent ring",
+        )
+        ringLog.incident(
+            RingLog.IncidentType.RING_AUDIO_FAILED,
+            "RingtonePlayer.advance",
+            callId,
+            data =
+                mapOf(
+                    "sourceKind" to (activeSource?.let(::sourceKind) ?: "unknown"),
+                    "attempted" to attemptedRungs.joinToString(","),
+                    "lastFailure" to lastFailure,
+                    "focusResult" to lastFocusResult,
+                ) + audioSnapshot,
+        )
+        abandonFocus()
+        return null
+    }
+
+    @Synchronized
+    private fun handleAsyncError(expectedGeneration: Long, expectedAttempt: Long, what: Int, extra: Int) {
+        if (generation != expectedGeneration || activeAttempt != expectedAttempt || activeEngine == null) return
+        ringLog.log(
+            CoreLogLevel.ERROR,
+            "ring",
+            "RingtonePlayer.advance",
+            activeCallId,
+            "playback async error",
+            mapOf("engine" to activeEngine!!.name, "what" to "$what", "extra" to "$extra"),
+        )
+        lastFailure = "async:${activeEngine!!.name}:$what:$extra"
+        val fallback = nextRung
+        releaseActiveEngine()
+        advance(fallback)
+    }
+
+    private fun schedulePlaybackVerification(
+        expectedGeneration: Long,
+        expectedAttempt: Long,
+        engine: RingPlaybackEngine,
+        fallback: Rung?,
+    ) {
+        verification?.cancel()
+        verification =
+            scheduler.schedule(PLAYBACK_VERIFY_DELAY_MS) {
+                verifyPlayback(expectedGeneration, expectedAttempt, engine, fallback)
+            }
+    }
+
+    @Synchronized
+    private fun verifyPlayback(
+        expectedGeneration: Long,
+        expectedAttempt: Long,
+        engine: RingPlaybackEngine,
+        fallback: Rung?,
+    ) {
+        if (generation != expectedGeneration || activeAttempt != expectedAttempt || activeEngine !== engine) return
+        if (runCatching { engine.isPlaying() }.getOrDefault(false)) return
+        lastFailure = "notPlaying:${engine.name}"
+        ringLog.log(
+            CoreLogLevel.INFO,
+            "ring",
+            "RingtonePlayer.verifyPlayback",
+            activeCallId,
+            "${engine.name} did not enter playing state — advancing fallback",
+        )
+        releaseActiveEngine()
+        advance(fallback)
+    }
+
+    private fun Rung.after(): Rung? =
+        when (this) {
+            Rung.PRIMARY -> Rung.RINGTONE
+            Rung.RINGTONE -> Rung.BUNDLED
+            Rung.BUNDLED -> null
         }
 
-        // Failure rung: plugin-bundled raw resource (code-referenced, R8-safe).
-        try {
-            val player = MediaPlayer.create(context, R.raw.ringkit_default_ringtone)
-            if (player != null) {
-                player.setAudioAttributes(ringAttributes)
-                player.isLooping = true
-                player.start()
-                mediaPlayer = player
-                return "BundledDefault"
-            }
-        } catch (e: Exception) {
-            ringLog.log(
-                CoreLogLevel.ERROR, "ring", "RingtonePlayer.playLadder", callId,
-                "every rung failed — silent ring", emptyMap(), e,
-            )
+    private fun sourceKind(uri: Uri): String =
+        when (uri.scheme) {
+            "content" -> "content"
+            "android.resource" -> "raw"
+            "file" -> "file"
+            else -> "other"
         }
-        return null
+
+    private fun emitState(state: RingAudioState) {
+        val listener = stateListener ?: return
+        postToOwner { listener(state) }
     }
 
     /**
@@ -290,24 +407,69 @@ class RingtonePlayer(
 
     private fun requestFocus(callId: String) {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val expectedGeneration = generation
         val request =
             AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
                 .setAudioAttributes(ringAttributes)
                 // Listener ALWAYS set (§8.4): loss → stop the sound, keep state.
                 .setOnAudioFocusChangeListener { change ->
-                    if (change == AudioManager.AUDIOFOCUS_LOSS ||
-                        change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ||
-                        change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK
-                    ) {
-                        ringLog.log(CoreLogLevel.INFO, "ring", "RingtonePlayer.focus", callId, "focus_loss_stop")
-                        stopAudioOnly()
-                    }
+                    onAudioFocusChange(change, callId, expectedGeneration)
                 }
                 .build()
         focusRequest = request
         val granted = audioManager.requestAudioFocus(request)
+        lastFocusResult =
+            when (granted) {
+                AudioManager.AUDIOFOCUS_REQUEST_GRANTED -> "granted"
+                AudioManager.AUDIOFOCUS_REQUEST_DELAYED -> "delayed"
+                AudioManager.AUDIOFOCUS_REQUEST_FAILED -> "failed"
+                else -> "unknown:$granted"
+            }
         if (granted != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-            ringLog.log(CoreLogLevel.INFO, "ring", "RingtonePlayer.focus", callId, "focus_denied_playing_anyway")
+            ringLog.log(
+                CoreLogLevel.INFO,
+                "ring",
+                "RingtonePlayer.focus",
+                callId,
+                "focus_not_granted_playing_anyway",
+                mapOf("focusResult" to lastFocusResult),
+            )
+        }
+    }
+
+    private fun captureAudioSnapshot(): Map<String, String> {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val ringerMode =
+            when (audioManager.ringerMode) {
+                AudioManager.RINGER_MODE_NORMAL -> "normal"
+                AudioManager.RINGER_MODE_VIBRATE -> "vibrate"
+                AudioManager.RINGER_MODE_SILENT -> "silent"
+                else -> "unknown:${audioManager.ringerMode}"
+            }
+        return mapOf(
+            "ringerMode" to ringerMode,
+            "ringVolume" to audioManager.getStreamVolume(AudioManager.STREAM_RING).toString(),
+            "ringVolumeMax" to audioManager.getStreamMaxVolume(AudioManager.STREAM_RING).toString(),
+            "ringMuted" to audioManager.isStreamMute(AudioManager.STREAM_RING).toString(),
+        )
+    }
+
+    @Synchronized
+    internal fun onAudioFocusChange(
+        change: Int,
+        callId: String,
+        expectedGeneration: Long = generation,
+    ) {
+        if (generation != expectedGeneration || activeCallId != callId) return
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+            -> {
+                ringLog.log(CoreLogLevel.INFO, "ring", "RingtonePlayer.focus", callId, "focus_loss_stop")
+                stopAudioOnly()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK ->
+                ringLog.log(CoreLogLevel.INFO, "ring", "RingtonePlayer.focus", callId, "focus_duck_keep_playing")
         }
     }
 
@@ -354,16 +516,26 @@ class RingtonePlayer(
         runCatching { vibrator().cancel() }
     }
 
+    @Synchronized
     private fun stopAudioOnly() {
-        mediaPlayer?.let { player ->
-            runCatching {
-                if (player.isPlaying) player.stop()
-            }
-            runCatching { player.release() }
-        }
-        mediaPlayer = null
-        ringtone?.let { tone -> runCatching { tone.stop() } }
-        ringtone = null
+        generation++
+        releaseActiveEngine()
+        activeCallId = null
+        activeSource = null
+        nextRung = null
+        emitState(RingAudioState.Stopped)
+        stateListener = null
         abandonFocus()
+    }
+
+    private fun releaseActiveEngine() {
+        verification?.cancel()
+        verification = null
+        activeEngine?.let { runCatching { it.stop() } }
+        activeEngine = null
+    }
+
+    private companion object {
+        const val PLAYBACK_VERIFY_DELAY_MS = 300L
     }
 }

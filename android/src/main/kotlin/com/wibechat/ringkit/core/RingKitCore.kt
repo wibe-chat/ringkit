@@ -160,6 +160,7 @@ object RingKitCore {
     /** Tests only: drop the process singleton between cases. */
     internal fun resetForTests() {
         synchronized(this) {
+            com.wibechat.ringkit.services.RingingService.resetForTests()
             instance?.writer?.shutdown()
             instance = null
         }
