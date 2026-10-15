@@ -2,6 +2,12 @@ package com.wibechat.ringkit.ui
 
 import android.content.Context
 import android.content.Intent
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ApplicationProvider
 import com.wibechat.ringkit.core.CoreCancelReason
 import com.wibechat.ringkit.core.IncomingCallOrchestrator
@@ -10,6 +16,7 @@ import com.wibechat.ringkit.core.RingKitIntents
 import com.wibechat.ringkit.core.TestSupport
 import org.junit.After
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -18,6 +25,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
+import org.robolectric.annotation.Config
 
 /**
  * §8.5 IncomingCallActivity: the full-screen call UI observes the in-process
@@ -75,6 +83,67 @@ class IncomingCallActivityTest {
     }
 
     @Test
+    @Config(sdk = [26, 27, 28, 29, 30, 35])
+    fun r20_incoming_screen_renders_caller_and_actions_on_supported_apis() {
+        orchestrator.showOnWriter(TestSupport.incomingCall(id = "c-1", name = "Alice"))
+        val activity = launch("c-1")
+        assertFalse("the live incoming screen stays open", activity.isFinishing)
+
+        val content = activity.findViewById<ViewGroup>(android.R.id.content)
+        val matches = ArrayList<View>()
+        content.findViewsWithText(matches, "Alice", View.FIND_VIEWS_WITH_TEXT)
+        assertEquals("caller identity is rendered", 1, matches.size)
+        for (label in listOf("Answer", "Decline")) {
+            matches.clear()
+            content.findViewsWithText(matches, label, View.FIND_VIEWS_WITH_TEXT)
+            assertEquals("$label action is rendered", 1, matches.size)
+            assertTrue("$label action is enabled", matches.single().isEnabled)
+            assertTrue("$label action is clickable", matches.single().isClickable)
+        }
+    }
+
+    @Test
+    @Config(sdk = [26])
+    fun r20_api26_incoming_screen_can_show_over_keyguard_and_wake_screen() {
+        orchestrator.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+        val activity = launch("c-1")
+        @Suppress("DEPRECATION")
+        val requiredFlags = WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+        assertEquals(requiredFlags, activity.window.attributes.flags and requiredFlags)
+    }
+
+    @Test
+    @Config(sdk = [26, 27, 28, 29, 30, 35])
+    fun r20_system_bar_insets_pad_the_incoming_screen_without_accumulating() {
+        orchestrator.showOnWriter(TestSupport.incomingCall(id = "c-1"))
+        val activity = launch("c-1")
+        val root = activity.findViewById<ViewGroup>(android.R.id.content).getChildAt(0)
+        val insets = WindowInsetsCompat.Builder()
+            .setInsets(WindowInsetsCompat.Type.systemBars(), Insets.of(5, 24, 7, 48))
+            .build()
+
+        repeat(2) {
+            ViewCompat.dispatchApplyWindowInsets(root, insets)
+            assertEquals(5, root.paddingLeft)
+            assertEquals(24, root.paddingTop)
+            assertEquals(7, root.paddingRight)
+            assertEquals(48, root.paddingBottom)
+        }
+        ViewCompat.dispatchApplyWindowInsets(
+            root,
+            WindowInsetsCompat.Builder()
+                .setInsets(WindowInsetsCompat.Type.systemBars(), Insets.NONE)
+                .build(),
+        )
+        assertEquals(0, root.paddingLeft)
+        assertEquals(0, root.paddingTop)
+        assertEquals(0, root.paddingRight)
+        assertEquals(0, root.paddingBottom)
+    }
+
+    @Test
+    @Config(sdk = [26, 29, 35])
     fun remote_cancel_finishes_the_fsi() {
         orchestrator.showOnWriter(TestSupport.incomingCall(id = "c-1"))
         val activity = launch("c-1")

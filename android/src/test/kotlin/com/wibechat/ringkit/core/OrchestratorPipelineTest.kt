@@ -5,6 +5,8 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.view.WindowManager
 import androidx.test.core.app.ApplicationProvider
 import com.wibechat.ringkit.services.RingingService
 import com.wibechat.ringkit.ui.AcceptTrampolineActivity
@@ -529,7 +531,8 @@ class OrchestratorPipelineTest {
     // ── trampoline (§4.3; r36 class) ─────────────────────────────────────
 
     @Test
-    fun trampoline_accept_persists_then_forwards_launch_intent_synchronously() {
+    @org.robolectric.annotation.Config(sdk = [26, 27, 29, 35])
+    fun r36_trampoline_accept_persists_then_forwards_launch_intent_synchronously() {
         orchestrator.showOnWriter(call())
         // The example/consumer app always has a launch intent; Robolectric's
         // test package needs a launcher activity registered for one to exist.
@@ -558,13 +561,22 @@ class OrchestratorPipelineTest {
         assertEquals("com.wibechat.ringkit.FakeLauncherActivity", next.component?.className)
         assertTrue(activity.isFinishing)
         assertNotNull("launch action persisted for consumeLaunchAction", core.writer.await { core.repository.peekLaunchAction() })
+        if (Build.VERSION.SDK_INT == 26) {
+            @Suppress("DEPRECATION")
+            val requiredFlags = WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            assertEquals(requiredFlags, activity.window.attributes.flags and requiredFlags)
+        }
+        controller.destroy()
     }
 
     @Test
+    @org.robolectric.annotation.Config(sdk = [26, 27, 29, 35])
     fun trampoline_null_intent_finishes_quietly() {
         val controller = Robolectric.buildActivity(AcceptTrampolineActivity::class.java)
         val activity = controller.setup().get()
         assertTrue("null-intent-hardened: no crash, just finish", activity.isFinishing)
         assertNull(shadowOf(activity).nextStartedActivity)
+        controller.destroy()
     }
 }

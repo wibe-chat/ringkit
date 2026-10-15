@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fix incoming-call screen crashes on Android 8–10 with compatible window and
+  system-bar inset handling. Preserve lock-screen display and screen wake-up on
+  Android 8.0 for both the incoming screen and the answer flow.
+
 Killed-state fast paths (device-verified, on `main`):
 
 - **Mode 2 — native FCM fast path:** the plugin's own FCM receiver parses `rk.*` pushes natively and

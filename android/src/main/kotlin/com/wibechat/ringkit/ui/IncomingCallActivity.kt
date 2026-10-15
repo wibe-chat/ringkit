@@ -11,11 +11,15 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.window.OnBackInvokedDispatcher
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import com.wibechat.ringkit.R
 import com.wibechat.ringkit.core.AwaitOutcome
 import com.wibechat.ringkit.core.CallRecord
@@ -66,10 +70,18 @@ class IncomingCallActivity : Activity() {
         core = RingKitCore.get(applicationContext)
         RingKitCore.sweepOnEntry(applicationContext)
 
-        setShowWhenLocked(true)
-        setTurnScreenOn(true)
+        if (Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON,
+            )
+        }
         // Edge-to-edge (mandatory on 16): draw behind bars; content pads itself.
-        window.setDecorFitsSystemWindows(false)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
         buildViews()
         setContentView(root)
@@ -392,8 +404,8 @@ class IncomingCallActivity : Activity() {
         )
 
         // Inset padding (edge-to-edge): keep the banner + buttons off the bars.
-        root.setOnApplyWindowInsetsListener { view, insets ->
-            val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars())
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             insets
         }
