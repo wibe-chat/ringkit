@@ -79,6 +79,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: free unused runner toolchain space
+        # The API sweep downloads large Robolectric Android artifacts. A prior
+        # hosted run exhausted disk during that download. Keep Android tooling.
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc \
+            /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/powershell /usr/share/swift
+          df -h /
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -93,13 +102,27 @@ jobs:
           flutter pub get
           cd example && flutter build apk --debug
       - name: run Robolectric suites
-        run: cd example/android && ./gradlew :ringkit:testDebugUnitTest --console=plain
+        run: |
+          df -h /
+          cd example/android && ./gradlew :ringkit:testDebugUnitTest --console=plain
       - name: upload test reports
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: robolectric-reports
-          path: android/build/reports/tests/
+          path: |
+            example/build/ringkit/reports/tests/
+            example/build/ringkit/test-results/
+
+  telemetry-backend:
+    name: fresh telemetry database and dashboard regressions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: isolated PostgreSQL contract and security tests
+        run: bash supabase/tests/fresh.sh
+      - name: administrator dashboard security tests
+        run: node --test tools/telemetry-dashboard/dashboard.test.mjs
 
   emulator:
     name: emulator API ${{ matrix.api-level }} (integration + killed-state harness)

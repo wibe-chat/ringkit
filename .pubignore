@@ -1,0 +1,62 @@
+# Pub ignores .gitignore when this file exists. Keep every safety exclusion
+# here, then add release-archive-only exclusions below.
+
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# Flutter/Dart/Pub related
+/pubspec.lock
+**/doc/api/
+.dart_tool/
+.flutter-plugins-dependencies
+/build/
+/coverage/
+
+# Local session state and environment files
+.claude/
+.worktrees/
+.playwright-mcp/
+.env
+.env.*
+!.env.example
+supabase/.temp/
+supabase/fresh-project/supabase/.temp/
+supabase/fresh-project/supabase/.branches/
+
+# Internal engineering documents
+PLAN.md
+CLAUDE.md
+SCOPE-*.md
+evidence/
+
+# Firebase client configuration and server credentials
+**/google-services.json
+**/service-account*.json
+**/*-service-account*.json
+**/*firebase-adminsdk*.json
+
+# Repository-maintenance and backend sources are not plugin runtime assets.
+.github/
+supabase/
+tools/
+docs/
+pigeons/
+test/
+android/src/test/

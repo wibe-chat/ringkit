@@ -18,8 +18,8 @@ so it deploys by drag-and-drop with no build step.
 ## What you need
 
 - A **Netlify account** (free tier is fine).
-- An existing compatible telemetry backend. The checked-in backend sources are a
-  partial reference, not a fresh-project installer; see [deployment prerequisites](../../docs/TELEMETRY.md#backend-deployment-status).
+- A telemetry backend in your own project; follow [Supabase setup](../../docs/SUPABASE_SETUP.md)
+  first. Existing deployments should review the [upgrade notes](../../docs/TELEMETRY.md#backend-deployment-status).
 - Your Supabase **service_role key**: Supabase dashboard → your project → *Settings →
   API → Project API keys → `service_role` → Reveal*. This is secret (full DB access);
   it only ever lives in Netlify's server-side environment.
@@ -54,8 +54,11 @@ Open the deployed URL and enter the **dashboard password**. It's stored server-s
 the Supabase `fleet_config` table under `key='dashboard_password'`. To rotate it:
 
 ```sql
-update fleet_config set value = encode(gen_random_bytes(18),'hex')
-where key = 'dashboard_password' returning value;
+insert into public.fleet_config (key, value)
+values ('dashboard_password',
+  replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', ''))
+on conflict (key) do update set value = excluded.value
+returning value;
 ```
 
 Share access only with trusted fleet administrators. Anyone with the password can read

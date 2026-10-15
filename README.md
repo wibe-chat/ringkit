@@ -16,7 +16,7 @@ engineered against that plugin's entire issue history (474 Android issues audite
 
 > **Preview.** MIT-licensed; install from Git (not published on pub.dev).
 > Fleet telemetry is **off by default**. Opting in sends diagnostic data to the backend you
-> configure; no telemetry endpoint or credentials are bundled. See [Telemetry](docs/TELEMETRY.md).
+> configure; no telemetry endpoint or credentials are bundled. See [Telemetry](https://github.com/wibe-chat/ringkit/blob/main/docs/TELEMETRY.md).
 
 <!-- TODO: drop a ~6s screen recording of an incoming-call ring (lock screen → answer) here.
      A GIF is the single highest-impact addition to this README — capture it on a physical device. -->
@@ -40,12 +40,13 @@ engineered against that plugin's entire issue history (474 Android issues audite
 - 🔒 **Restricted native components** — no microphone/camera permissions; RingKit-owned components are
   unexported except the opt-in FCM receiver protected by Google's signature permission.
   Persistence stays outside cloud backup (no ghost calls after a restore).
-  See [integration guidance](docs/INTEGRATION.md) for merged Jetpack Telecom components.
+  See [integration guidance](https://github.com/wibe-chat/ringkit/blob/main/docs/INTEGRATION.md) for merged Jetpack Telecom components.
 
 ## Table of contents
 
 - [Install](#install)
 - [Quick start](#quick-start)
+- [Optional analytics with your own Supabase](#optional-analytics-with-your-own-supabase)
 - [How it works](#how-it-works)
 - [ringkit vs. flutter_callkit_incoming](#ringkit-vs-flutter_callkit_incoming)
 - [Status](#status)
@@ -68,7 +69,7 @@ Set **`minSdk 26`** in `android/app/build.gradle(.kts)`. Everything else — per
 the full-screen activity — ships in the plugin manifest and merges automatically. No iOS; guard
 calls with `Platform.isAndroid` in a cross-platform app.
 
-**→ Full walkthrough: [docs/INTEGRATION.md](docs/INTEGRATION.md).**
+**→ Full walkthrough: [docs/INTEGRATION.md](https://github.com/wibe-chat/ringkit/blob/main/docs/INTEGRATION.md).**
 
 ## Quick start
 
@@ -112,6 +113,21 @@ final result = await RingKit.showIncomingCall(IncomingCall(
 Accept & decline also work programmatically (`RingKit.acceptCall(id)` / `declineCall(id)`) for
 in-app answer UIs — the identical native path as a notification tap.
 
+## Optional analytics with your own Supabase
+
+Calling features work without a backend. To collect RingKit diagnostics in **your own**
+Supabase account, follow the [Supabase setup guide](https://github.com/wibe-chat/ringkit/blob/main/docs/SUPABASE_SETUP.md):
+
+1. Create a dedicated project and apply the supplied fresh-project database migration.
+2. Deploy `checkin` and `purge`, configure the server-only maintenance secret and scheduled jobs.
+3. Generate a RingKit app key, then add your **project URL + app key** to `RingKitConfig.telemetry`.
+
+No Supabase Flutter SDK or end-user Supabase login is required. The example app accepts those
+values in its telemetry settings. Telemetry stays **off by default**; the guide includes a
+copyable Flutter configuration and checks to run on your own deployment.
+Never put a Supabase service-role key, database password or purge secret in an app.
+The optional dashboard is for trusted all-app administrators, not public visitors.
+
 ## How it works
 
 - **Mode 1 (default)** — your Dart FCM handler calls `showIncomingCall(...)`. Works in every app
@@ -119,7 +135,7 @@ in-app answer UIs — the identical native path as a notification tap.
 - **Mode 2 (opt-in, one manifest line)** — the plugin's own FCM receiver parses `rk.*` pushes
   **natively** and rings from killed in < 300 ms, with Dart never blocking the ring. Your existing
   `firebase_messaging` handlers keep firing for every non-call message. See
-  [docs/FCM.md](docs/FCM.md).
+  [docs/FCM.md](https://github.com/wibe-chat/ringkit/blob/main/docs/FCM.md).
 - **Killed-state events** — the state machine + event log persist outside cloud backup; unconsumed
   events replay on next launch, and a registered background handler runs headless for actionable
   events (decline-while-dead → your server, no UI).
@@ -140,7 +156,7 @@ in-app answer UIs — the identical native path as a notification tap.
 | Silent no-op when process is alive | ✅ no singleton in the action path | ⚠️ known failure |
 | API | typed Pigeon models, sealed events | 40-field maps, `handle` often null |
 
-**Migrating from `flutter_callkit_incoming`?** → [docs/MIGRATION.md](docs/MIGRATION.md).
+**Migrating from `flutter_callkit_incoming`?** → [docs/MIGRATION.md](https://github.com/wibe-chat/ringkit/blob/main/docs/MIGRATION.md).
 
 ## Status
 
@@ -156,7 +172,7 @@ in-app answer UIs — the identical native path as a notification tap.
 | Telecom opt-in (`telecomIntegration` / per-call `useTelecom`): system call registration, audio routing + `AudioRouteChanged`, rings even with notifications blocked | ✅ device-verified (API 26–36 incl. cold-process starts; automatic fallback to non-telecom on any failure) |
 | Bluetooth/watch/wired-headset answer buttons | ✅ wired through the telecom module into the standard accept flow (unit-tested; physical-Bluetooth device pass pending) |
 | Android 16 promoted (“Live Updates”) ongoing notification | ✅ promotion requested + status-bar chip on API 36 (OS treatment ships with A16 production builds) |
-| Fleet telemetry upload | ✅ opt-in incidents, heartbeat and operator-requested pulls; off by default. Backend sources are a partial reference, not a turnkey deployment. |
+| Fleet telemetry upload | ✅ opt-in incidents, heartbeat and operator-requested pulls; off by default. Fresh-project Supabase setup supplied; owners must verify their hosted deployment. |
 
 **Quality bar:** 1000+ generated Robolectric tests (every state-machine transition is its own test
 case) + Dart unit tests + an on-emulator integration suite + a two-phase killed-state harness — all
@@ -166,11 +182,13 @@ also verified on physical hardware.
 
 | Guide | What's in it |
 |---|---|
-| **[docs/INTEGRATION.md](docs/INTEGRATION.md)** | The complete walkthrough — quickstart, FCM wiring, accept flow, lock-screen requirements, permissions/onboarding, customization, testing. Start here. |
-| **[docs/FCM.md](docs/FCM.md)** | The `rk.*` push payload contract, server rules, and Mode 1 vs Mode 2. |
-| **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** | "My call didn't ring" decision tree, the common-issue table, and how to read `diagnose()`. |
-| **[docs/MIGRATION.md](docs/MIGRATION.md)** | Moving from `flutter_callkit_incoming` — API map and behavior differences. |
-| **[docs/TELEMETRY.md](docs/TELEMETRY.md)** | Opt-in collection, privacy, wire contract and backend deployment prerequisites. |
+| **[docs/INTEGRATION.md](https://github.com/wibe-chat/ringkit/blob/main/docs/INTEGRATION.md)** | The complete walkthrough — quickstart, FCM wiring, accept flow, lock-screen requirements, permissions/onboarding, customization, testing. Start here. |
+| **[docs/FCM.md](https://github.com/wibe-chat/ringkit/blob/main/docs/FCM.md)** | The `rk.*` push payload contract, server rules, and Mode 1 vs Mode 2. |
+| **[docs/TROUBLESHOOTING.md](https://github.com/wibe-chat/ringkit/blob/main/docs/TROUBLESHOOTING.md)** | "My call didn't ring" decision tree, the common-issue table, and how to read `diagnose()`. |
+| **[docs/MIGRATION.md](https://github.com/wibe-chat/ringkit/blob/main/docs/MIGRATION.md)** | Moving from `flutter_callkit_incoming` — API map and behavior differences. |
+| **[docs/TELEMETRY.md](https://github.com/wibe-chat/ringkit/blob/main/docs/TELEMETRY.md)** | Opt-in collection, privacy, wire contract and backend deployment prerequisites. |
+| **[Supabase setup](https://github.com/wibe-chat/ringkit/blob/main/docs/SUPABASE_SETUP.md)** | Create your own analytics backend, configure app keys, deploy functions and schedule retention. |
+| **[Publishing to pub.dev](https://github.com/wibe-chat/ringkit/blob/main/docs/PUBLISHING.md)** | Maintainer release checks, archive inspection and the deliberate publication command. |
 | **`example/`** | A complete manual test harness + reference integration (per-scenario buttons, an event console, a diagnostics screen, and backend-free adb triggers). |
 
 ## Requirements

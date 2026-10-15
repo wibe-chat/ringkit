@@ -97,14 +97,24 @@ budget (they are operator-initiated) and clear the `pull_buffer` flag when the l
   roll-ups are kept.
 - All tables are deny-by-default (no anonymous access); only the edge functions (service role)
   and the dashboard can touch data.
+- In the fresh-project backend, automatic issues/device counts appear as soon as an incident
+  arrives, but `occurrence_count` is updated by heartbeat fingerprint deltas, which already
+  include the uploaded incident. It can be zero before the first heartbeat; counting both
+  paths would double-count failures. Manual `user_report` occurrences count on upload.
+  Heartbeat deltas have no request ID in the current protocol: a lost response followed by
+  a retry can count a delta again. These totals are diagnostic estimates, not billing metrics.
 
 ## Backend deployment status
 
-The Flutter plugin works without a telemetry backend. The `supabase/` directory is a
-**partial reference implementation**, not a turnkey fresh-project deployment: the base
-tables, bookkeeping RPCs, private storage bucket and scheduled jobs are not all represented
-by checked-in bootstrap migrations. Do not apply the delta migrations to an empty project
-or treat the SQL test fixture as a production schema.
+The Flutter plugin works without a telemetry backend. For a **new, dedicated project**,
+follow [Use your own Supabase project](SUPABASE_SETUP.md). The isolated migration tree in
+`supabase/fresh-project/supabase/` supplies the base tables, bookkeeping RPCs and private
+Storage bucket; the guide covers function deployment, app keys, scheduling and verification.
+Local tests do not replace validation of your hosted project's configuration and services.
+
+The original `supabase/migrations/` directory contains **existing-deployment upgrades**,
+not an empty-project baseline. Do not mix the two migration trees or treat the SQL test
+fixtures as production schemas. Never apply the fresh baseline to an existing deployment.
 
 For an existing compatible backend, review and deploy the registration-ownership migration,
 updated `checkin` and `purge` functions, and dashboard together. The repository does not
@@ -165,8 +175,9 @@ device identity; protect the ingest service with appropriate abuse controls for 
 ## Cost model
 
 Per device per day: one ~1 KB heartbeat + incidents only on failure (deduped, ≤ once per
-fingerprint per day, hard `budget_kb` cap). Ingress is free; retention is bounded. In practice
-a 50k-device fleet fits inside a single Supabase Pro plan.
+fingerprint per day, `budget_kb` cap). Retention depends on a working purge schedule.
+Estimate requests, storage, compute and egress for your actual fleet and check
+[current Supabase pricing](https://supabase.com/pricing); no plan size or fixed cost is guaranteed.
 
 **Why tiered, not naive log shipping.** A naive "ship every device's rotating buffer" design at
 50k devices, ~5 MB/device/day, is ~250 GB/day (~7.5 TB/month) of ingest and storage — orders of

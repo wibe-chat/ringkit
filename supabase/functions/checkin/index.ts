@@ -12,7 +12,7 @@
 //
 // Request/response contracts are documented in docs/TELEMETRY.md. The function
 // is a thin transport shell: all counter bookkeeping is atomic in Postgres
-// (ringkit_* SECURITY DEFINER functions, service-role only). Failure semantics:
+// (ringkit_* functions, service-role only). Failure semantics:
 // 401 bad token · 413 over daily budget (pulls exempt) · client backs off on
 // 429/5xx and retries later — payload files stay on the device, so nothing is
 // ever lost by a failed upload. Incident retries are idempotent per

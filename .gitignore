@@ -40,6 +40,8 @@ migrate_working_dir/
 .env.*
 !.env.example
 supabase/.temp/
+supabase/fresh-project/supabase/.temp/
+supabase/fresh-project/supabase/.branches/
 
 # Internal engineering docs — kept local, never published
 PLAN.md

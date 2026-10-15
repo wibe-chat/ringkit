@@ -1,0 +1,5 @@
+# Standalone migration tree for a NEW Supabase project only.
+project_id = "ringkit-fresh-project"
+
+[db]
+major_version = 17

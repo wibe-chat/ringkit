@@ -11,7 +11,12 @@ Public-preview preparation and telemetry hardening:
   must update function configuration and scheduler credentials before deploying this change.
 - Bound decompressed ingest requests and prevent dashboard failures from logging fleet keys.
 - Declare the normal network-state permission used by telemetry's metered-network policy.
-- Correct setup/privacy documentation and disclose incomplete backend bootstrap sources.
+- Add a separately versioned fresh-project Supabase baseline and owner setup guide;
+  keep legacy deployment upgrades separate and telemetry off by default.
+- Add pub.dev publishing guidance and runtime-only archive exclusions; declare the
+  generated Pigeon code's existing `meta` dependency directly.
+- Free unused hosted-runner toolchains before the full Robolectric API sweep and
+  collect test reports from their actual build output directory.
 
 - Fix incoming-call screen crashes on Android 8–10 with compatible window and
   system-bar inset handling. Preserve lock-screen display and screen wake-up on
@@ -22,7 +27,7 @@ Killed-state fast paths (device-verified, on `main`):
 - **Mode 2 — native FCM fast path:** the plugin's own FCM receiver parses `rk.*` pushes natively and
   rings in **< 300 ms from killed**, with Dart never on the critical path. Enabled by one manifest
   line; your existing `firebase_messaging` handlers keep firing for every non-call message. Detects
-  FCM priority downgrades (`fcmDowngraded`). See [docs/FCM.md](docs/FCM.md).
+  FCM priority downgrades (`fcmDowngraded`). See [docs/FCM.md](https://github.com/wibe-chat/ringkit/blob/main/docs/FCM.md).
 - **Headless background event handler:** `setBackgroundEventHandler` runs a top-level Dart function
   in a headless isolate for actionable events while the app is dead — a decline-while-dead reaches
   your server immediately instead of waiting for the next launch.
