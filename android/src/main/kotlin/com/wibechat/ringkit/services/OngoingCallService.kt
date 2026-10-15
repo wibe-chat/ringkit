@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.wibechat.ringkit.R
@@ -156,6 +157,7 @@ class OngoingCallService : Service() {
      * §8.1: `phoneCall` always; `microphone` only when the merged manifest
      * declares it on THIS service and RECORD_AUDIO is actually granted.
      */
+    @RequiresApi(29)
     private fun foregroundTypes(): Int {
         var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
         runCatching {

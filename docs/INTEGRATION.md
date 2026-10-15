@@ -48,14 +48,14 @@ arrived" and "user answered/declined".
 
 ## 1. Install
 
-Private repo — consume as a git dependency (ask the repo owner for access):
+Consume as a Git dependency; pin a reviewed tag or commit for reproducible builds:
 
 ```yaml
 # pubspec.yaml
 dependencies:
   ringkit:
     git:
-      url: https://github.com/Rishin-zartek/ringkit.git
+      url: https://github.com/wibe-chat/ringkit.git
       ref: main        # or pin a tag/commit for reproducible builds
 ```
 
@@ -416,11 +416,11 @@ registration/`addCall` failure falls back to normal non-telecom behavior automat
 is never blocked — and shows up in `diagnose()`. Without telecom (off, or fallen back),
 `setAudioRoute` honestly returns `wrongState` and `AudioRouteChanged` never fires.
 
-**Not yet — don't design around these until their phase lands:**
+**Optional capabilities and platform scope:**
 
 | Feature | Status |
 |---|---|
-| Remote telemetry upload | Planned (final pre-release scope). The `telemetry` config field is accepted but inert — nothing leaves the device. |
+| Remote telemetry upload | Implemented, off by default. An explicit `telemetry` configuration enables uploads to your backend; review [privacy and deployment prerequisites](TELEMETRY.md). |
 | iOS | Never (by design). |
 
 ---

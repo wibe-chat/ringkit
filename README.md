@@ -3,7 +3,7 @@
 ![platform](https://img.shields.io/badge/platform-Android-brightgreen)
 ![min SDK](https://img.shields.io/badge/minSdk-26-blue)
 ![license](https://img.shields.io/badge/license-MIT-purple)
-![state](https://img.shields.io/badge/status-internal%20preview-orange)
+![state](https://img.shields.io/badge/status-preview-orange)
 
 **A CallKit-style incoming-call plugin for Flutter, Android-only.** Ringtone + vibration, a
 full-screen lock-screen call UI, a CallStyle notification, missed-call surfaces, and **reliable
@@ -14,8 +14,9 @@ answered or declined."* You bring the push transport (FCM) and the media stack (
 WebRTC). Built from scratch on 2026 SDKs as a ground-up replacement for `flutter_callkit_incoming`,
 engineered against that plugin's entire issue history (474 Android issues audited into the design).
 
-> **Internal preview.** Private package, not on pub.dev; MIT-licensed, access by invitation.
-> Fleet telemetry ships **inert** (nothing leaves the device).
+> **Preview.** MIT-licensed; install from Git (not published on pub.dev).
+> Fleet telemetry is **off by default**. Opting in sends diagnostic data to the backend you
+> configure; no telemetry endpoint or credentials are bundled. See [Telemetry](docs/TELEMETRY.md).
 
 <!-- TODO: drop a ~6s screen recording of an incoming-call ring (lock screen → answer) here.
      A GIF is the single highest-impact addition to this README — capture it on a physical device. -->
@@ -36,8 +37,10 @@ engineered against that plugin's entire issue history (474 Android issues audite
 - 🩺 **Honest failure reporting** — every `showIncomingCall` returns *exactly how it rang*
   (`shown` / `degraded({fsiDenied,…})` / `failed(notificationsBlocked)` / `expired`), plus a
   `diagnose()` fix-it report and OEM deep-links. **It never fails silently.**
-- 🔒 **Safe by construction** — no microphone/camera permissions, nothing exported to other apps,
-  all persistence outside cloud backup (no ghost calls after a restore).
+- 🔒 **Restricted native components** — no microphone/camera permissions; RingKit-owned components are
+  unexported except the opt-in FCM receiver protected by Google's signature permission.
+  Persistence stays outside cloud backup (no ghost calls after a restore).
+  See [integration guidance](docs/INTEGRATION.md) for merged Jetpack Telecom components.
 
 ## Table of contents
 
@@ -57,7 +60,7 @@ engineered against that plugin's entire issue history (474 Android issues audite
 dependencies:
   ringkit:
     git:
-      url: https://github.com/Rishin-zartek/ringkit.git
+      url: https://github.com/wibe-chat/ringkit.git
       ref: main   # pin a tag/commit for reproducible builds
 ```
 
@@ -153,7 +156,7 @@ in-app answer UIs — the identical native path as a notification tap.
 | Telecom opt-in (`telecomIntegration` / per-call `useTelecom`): system call registration, audio routing + `AudioRouteChanged`, rings even with notifications blocked | ✅ device-verified (API 26–36 incl. cold-process starts; automatic fallback to non-telecom on any failure) |
 | Bluetooth/watch/wired-headset answer buttons | ✅ wired through the telecom module into the standard accept flow (unit-tested; physical-Bluetooth device pass pending) |
 | Android 16 promoted (“Live Updates”) ongoing notification | ✅ promotion requested + status-bar chip on API 36 (OS treatment ships with A16 production builds) |
-| Fleet telemetry upload | 🔜 final pre-release scope (inert today) |
+| Fleet telemetry upload | ✅ opt-in incidents, heartbeat and operator-requested pulls; off by default. Backend sources are a partial reference, not a turnkey deployment. |
 
 **Quality bar:** 1000+ generated Robolectric tests (every state-machine transition is its own test
 case) + Dart unit tests + an on-emulator integration suite + a two-phase killed-state harness — all
@@ -167,11 +170,12 @@ also verified on physical hardware.
 | **[docs/FCM.md](docs/FCM.md)** | The `rk.*` push payload contract, server rules, and Mode 1 vs Mode 2. |
 | **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** | "My call didn't ring" decision tree, the common-issue table, and how to read `diagnose()`. |
 | **[docs/MIGRATION.md](docs/MIGRATION.md)** | Moving from `flutter_callkit_incoming` — API map and behavior differences. |
+| **[docs/TELEMETRY.md](docs/TELEMETRY.md)** | Opt-in collection, privacy, wire contract and backend deployment prerequisites. |
 | **`example/`** | A complete manual test harness + reference integration (per-scenario buttons, an event console, a diagnostics screen, and backend-free adb triggers). |
 
 ## Requirements
 
-- Flutter ≥ 3.44 (stable) · Dart 3
+- Flutter ≥ 3.44 (stable) · Dart ≥ 3.12.2
 - Android **minSdk 26** (Android 8.0), compileSdk 36 · AGP 8.x or 9.x (both CI-tested)
 - A push transport (FCM) and, for connected calls, a media stack (LiveKit / Agora / WebRTC)
 - **Android only** — no iOS, by design

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Public-preview preparation and telemetry hardening:
+
+- Promote the opt-in telemetry implementation and Android compatibility repair together;
+  telemetry remains disabled unless explicitly configured.
+- Bind registration atomically to its existing app; add a service-role-only migration.
+- Require a separate server-only `RINGKIT_PURGE_SECRET` for maintenance. Existing operators
+  must update function configuration and scheduler credentials before deploying this change.
+- Bound decompressed ingest requests and prevent dashboard failures from logging fleet keys.
+- Declare the normal network-state permission used by telemetry's metered-network policy.
+- Correct setup/privacy documentation and disclose incomplete backend bootstrap sources.
+
+- Fix incoming-call screen crashes on Android 8–10 with compatible window and
+  system-bar inset handling. Preserve lock-screen display and screen wake-up on
+  Android 8.0 for both the incoming screen and the answer flow.
+
 Killed-state fast paths (device-verified, on `main`):
 
 - **Mode 2 — native FCM fast path:** the plugin's own FCM receiver parses `rk.*` pushes natively and

@@ -1,14 +1,13 @@
-// ringkit fleet telemetry — read/debug dashboard (Netlify Function, Node).
+// ringkit fleet telemetry — administrator dashboard (Netlify Function, Node).
 //
 // One self-contained, ZERO-DEPENDENCY function serves the HTML dashboard AND its
 // JSON API (so it deploys by drag-and-drop with no build step). It reads every
 // telemetry table over Supabase's REST API with the SERVICE ROLE key (the tables
-// are deny-all RLS, so only this — or Studio — can see them). Hand the deployed
-// URL + the dashboard password to developers: they browse devices across ALL
-// apps, read the decompressed black-box log per incident, and trigger the two
-// SAFE debug knobs (raise capture level, request a full-buffer pull).
+// are deny-all RLS, so only this — or Studio — can see them). Access is for
+// trusted fleet administrators only: it spans ALL apps, exposes fleet API keys,
+// manages those keys and can raise capture level or request full-buffer pulls.
 //
-// It never exposes the fleet api keys, device tokens, or the kill switch.
+// Device tokens and the service-role key are not returned to the browser.
 // Auth: every /?api=... call must carry `x-dashboard-key: <password>` (stored
 // server-side in fleet_config key='dashboard_password').
 //
@@ -32,7 +31,7 @@ async function rest(pathAndQuery, opts = {}) {
     headers: Object.assign({}, AUTH, opts.headers || {}),
     body: opts.body,
   });
-  if (!r.ok && r.status !== 206) throw new Error("rest " + r.status + " " + pathAndQuery);
+  if (!r.ok && r.status !== 206) throw new Error("rest " + r.status);
   const text = await r.text();
   return text ? JSON.parse(text) : null;
 }
@@ -80,9 +79,8 @@ export default async (req) => {
 
   if (!api) return new Response(HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
   if (!SB || !SR) return json(500, { error: "server not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)" });
-  if (!(await authed(req))) return json(401, { error: "unauthorized" });
-
   try {
+    if (!(await authed(req))) return json(401, { error: "unauthorized" });
     if (api === "summary") {
       const [devices, openIssues, apps] = await Promise.all([
         count("devices?select=install_id&limit=1"),
@@ -213,8 +211,9 @@ export default async (req) => {
     }
 
     return json(400, { error: "unknown api" });
-  } catch (e) {
-    console.error("dashboard error:", e && e.message ? e.message : e);
+  } catch {
+    // Upstream errors may contain URLs with fleet keys or other credentials.
+    console.error("dashboard request failed");
     return json(500, { error: "internal" });
   }
 };

@@ -586,7 +586,7 @@ class _HarnessHomeState extends State<HarnessHome> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _section('Show (§15: now / delayed / types / avatar)'),
+                _section('Show (now / delayed / types / avatar)'),
                 Wrap(spacing: 6, runSpacing: 6, children: [
                   _btn('Show now', () => _show()),
                   _btn('In 5s', () => _show(delay: const Duration(seconds: 5))),
@@ -596,7 +596,7 @@ class _HarnessHomeState extends State<HarnessHome> {
                   _btn('Avatar', () => _show(withAvatar: true)),
                   _btn('Auth-header avatar', () => _show(withAuthHeaders: true)),
                 ]),
-                _section('Multi-call (§5.2)'),
+                _section('Multi-call'),
                 Wrap(spacing: 6, runSpacing: 6, children: [
                   _btn('2nd concurrent call', () => _show(namePrefix: 'Second')),
                   _btn('Call while in-call', () async {
@@ -606,7 +606,7 @@ class _HarnessHomeState extends State<HarnessHome> {
                     await _show(namePrefix: 'Busy');
                   }),
                 ]),
-                _section('Cancel-push (§7.4 reasons) + races'),
+                _section('Cancel-push reasons + races'),
                 Wrap(spacing: 6, runSpacing: 6, children: [
                   for (final reason in CancelReason.values.where(
                       (r) => r != CancelReason.localDismiss))
@@ -615,7 +615,7 @@ class _HarnessHomeState extends State<HarnessHome> {
                             (id) => RingKit.cancelCall(id, reason: reason))),
                   _btn('Out-of-order cancel', _outOfOrderCancel),
                 ]),
-                _section('In-app answer UI (§15/#375) — selected call'),
+                _section('In-app answer UI — selected call'),
                 Wrap(spacing: 6, runSpacing: 6, children: [
                   _btn('Accept', () => _cmd('accept', selected, RingKit.acceptCall)),
                   _btn('Decline',
@@ -629,7 +629,7 @@ class _HarnessHomeState extends State<HarnessHome> {
                     unawaited(_refreshActive());
                   }),
                 ]),
-                _section('Outgoing leg (§15) + updateCallInfo'),
+                _section('Outgoing leg + updateCallInfo'),
                 Wrap(spacing: 6, runSpacing: 6, children: [
                   _btn('Start outgoing', _startOutgoing),
                   _btn('updateCallInfo', _updateInfo),
@@ -818,7 +818,7 @@ class _HarnessHomeState extends State<HarnessHome> {
       children: [
         Row(children: [
           Expanded(
-              child: Text('Onboarding flow (§11.2)',
+              child: Text('Onboarding flow',
                   style: Theme.of(context).textTheme.titleMedium)),
           IconButton(onPressed: _loadSnapshot, icon: const Icon(Icons.refresh)),
         ]),
@@ -909,7 +909,7 @@ class _HarnessHomeState extends State<HarnessHome> {
       children: [
         Row(children: [
           Expanded(
-              child: Text('Fleet telemetry (§11.5)',
+              child: Text('Fleet telemetry',
                   style: Theme.of(context).textTheme.titleMedium)),
           IconButton(
               onPressed: () => unawaited(_loadTelemetryTab()),

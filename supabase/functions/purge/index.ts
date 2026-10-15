@@ -1,6 +1,7 @@
 // ringkit fleet telemetry — nightly TTL purge (invoked by pg_cron via pg_net).
 //
-// POST /functions/v1/purge   Authorization: Bearer <fleet api key>
+// POST /functions/v1/purge   Authorization: Bearer <RINGKIT_PURGE_SECRET>
+// Server-only maintenance credential: never use a client fleet key here.
 //   body: { "max_age_days": 60 }   (optional; default 60; 0 = purge everything,
 //                                   operator-only, used by maintenance/smoke cleanup)
 //
@@ -17,9 +18,9 @@ const supabase = createClient(
 
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return new Response("POST only", { status: 405 });
-  const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-  const { data: cfg } = await supabase.from("fleet_config").select("value").eq("key", "api_key").single();
-  if (!cfg || cfg.value !== token) return new Response("unauthorized", { status: 401 });
+  const token = req.headers.get("authorization")?.match(/^Bearer\s+(\S+)$/i)?.[1];
+  const secret = Deno.env.get("RINGKIT_PURGE_SECRET");
+  if (!secret || !token || secret !== token) return new Response("unauthorized", { status: 401 });
 
   let maxAgeDays = 60;
   try {

@@ -24,8 +24,10 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <!-- Avatar fetch only (§8.1). -->
+    <!-- Avatar fetch and opt-in telemetry. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Normal permission used by telemetry's unmetered-network preference. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application>
 

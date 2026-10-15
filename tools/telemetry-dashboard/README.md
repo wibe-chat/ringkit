@@ -1,14 +1,16 @@
-# ringkit fleet — telemetry debug dashboard
+# ringkit fleet — telemetry administrator dashboard
 
-A password-protected web dashboard over the ringkit telemetry backend, for you and
-your app developers to debug field issues. It shows **all apps**: browse devices,
+A password-protected web dashboard for **trusted fleet administrators**. It shows **all apps**: browse devices,
 drill into a device's incidents, read the decompressed black-box log per incident,
-and trigger the two safe debug knobs (raise a device's capture level, request a
+and change diagnostic controls (raise a device's capture level, request a
 full-buffer pull). It runs as a single **Netlify Function** that reads Supabase with
 the service role — so the powerful key stays server-side and never reaches the browser.
 
-It deliberately does **not** expose the fleet API keys, device tokens, or the kill
-switch (kill stays an admin action in Supabase Studio).
+The password grants **all-app administrator access**, including listing, creating,
+renaming, revoking and deleting fleet API keys. App filters are not authorization
+boundaries. Do not give this password to tenant/app developers who should only see
+their own app. Device tokens and the service-role key are not returned to the browser;
+the kill switch stays an action in Supabase Studio.
 
 The function is **zero-dependency** (it talks to Supabase over plain REST with `fetch`),
 so it deploys by drag-and-drop with no build step.
@@ -16,6 +18,8 @@ so it deploys by drag-and-drop with no build step.
 ## What you need
 
 - A **Netlify account** (free tier is fine).
+- An existing compatible telemetry backend. The checked-in backend sources are a
+  partial reference, not a fresh-project installer; see [deployment prerequisites](../../docs/TELEMETRY.md#backend-deployment-status).
 - Your Supabase **service_role key**: Supabase dashboard → your project → *Settings →
   API → Project API keys → `service_role` → Reveal*. This is secret (full DB access);
   it only ever lives in Netlify's server-side environment.
@@ -28,7 +32,7 @@ so it deploys by drag-and-drop with no build step.
 2. Netlify → *Sites* → drag the zip onto the **"Deploy manually / drag and drop"** area.
    Netlify creates a site and deploys the function (nothing to install — zero deps).
 3. Open the new site → *Site configuration → Environment variables* → add:
-   - `SUPABASE_URL` = `https://nqfqrdkcgibeqlpmpnko.supabase.co`
+   - `SUPABASE_URL` = `https://<your-project-ref>.supabase.co`
    - `SUPABASE_SERVICE_ROLE_KEY` = your Supabase **service_role** key
 4. **Redeploy once** (Deploys → *Trigger deploy*, or re-drop the zip) so the function
    picks up the new environment variables.
@@ -38,8 +42,9 @@ so it deploys by drag-and-drop with no build step.
 ```bash
 cd tools/telemetry-dashboard
 npx netlify-cli login
-npx netlify-cli env:set SUPABASE_URL "https://nqfqrdkcgibeqlpmpnko.supabase.co"
-npx netlify-cli env:set SUPABASE_SERVICE_ROLE_KEY "<your service_role key>"
+npx netlify-cli env:set SUPABASE_URL "https://<your-project-ref>.supabase.co"
+# Set SUPABASE_SERVICE_ROLE_KEY in Netlify's protected server-side environment UI.
+# Avoid placing real credentials in shell history or deployment logs.
 npx netlify-cli deploy --prod
 ```
 
@@ -53,17 +58,24 @@ update fleet_config set value = encode(gen_random_bytes(18),'hex')
 where key = 'dashboard_password' returning value;
 ```
 
-Hand the URL + password to a developer and they can debug immediately — nothing else
-to install on their side. Keep both private: anyone with them can read all fleet data.
+Share access only with trusted fleet administrators. Anyone with the password can read
+all fleet data and manage every app's keys. Use a strong unique password and review
+deployment access separately from app-key distribution.
 
 ## Notes
 
-- **Env vars only** — no secrets are committed. `SUPABASE_URL` +
+- **Server-side configuration** — never commit secrets. `SUPABASE_URL` +
   `SUPABASE_SERVICE_ROLE_KEY` live in Netlify; the dashboard password lives in
   `fleet_config`.
 - **Reads with the service role**, which bypasses the deny-all RLS — that's why the key
   must stay in the Netlify function and never in a browser/static file.
 - **Multi-app**: use the *all apps* filter or pick one `app_id`. Every device shows its
   `app_id` + `package_name`.
-- The two knobs (capture level, request pull) write to `devices`; they're reversible and
-  safe. The kill switch and budgets are intentionally not exposed here.
+- Capture-level changes and full-buffer pulls can expose sensitive diagnostic data;
+  use them only with appropriate tester consent. Key deletion/revocation can disrupt
+  registration. The kill switch and budgets are not exposed here.
+
+## Offline regression tests
+
+Run `node --test tools/telemetry-dashboard/dashboard.test.mjs` from the repository root.
+Tests use synthetic credentials and do not contact a backend.

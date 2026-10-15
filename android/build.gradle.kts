@@ -56,6 +56,8 @@ android {
         unitTests {
             isIncludeAndroidResources = true
             all {
+                // The API compatibility matrix loads multiple Robolectric framework jars.
+                it.maxHeapSize = "2g"
                 it.outputs.upToDateWhen { false }
 
                 it.testLogging {

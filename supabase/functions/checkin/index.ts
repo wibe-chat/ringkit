@@ -39,8 +39,31 @@ async function readBody(req: Request): Promise<{ raw: Uint8Array; parsed: unknow
   if (stream && /gzip/i.test(req.headers.get("content-encoding") ?? "")) {
     stream = stream.pipeThrough(new DecompressionStream("gzip"));
   }
-  const raw = new Uint8Array(await new Response(stream).arrayBuffer());
-  if (raw.byteLength > MAX_BODY_BYTES) throw new RangeError("body too large");
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  if (stream) {
+    const reader = stream.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_BODY_BYTES) {
+          await reader.cancel().catch(() => {});
+          throw new RangeError("body too large");
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+  const raw = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    raw.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
   return { raw, parsed: JSON.parse(new TextDecoder().decode(raw)) };
 }
 
@@ -72,6 +95,8 @@ function knobs(row: Record<string, unknown>, extra: Record<string, unknown> = {}
 
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return json(405, { error: "POST only" });
+  const token = req.headers.get("authorization")?.match(/^Bearer\s+(\S+)$/i)?.[1];
+  if (!token) return json(401, { error: "unauthorized" });
 
   let raw: Uint8Array;
   // deno-lint-ignore no-explicit-any
@@ -81,10 +106,9 @@ Deno.serve(async (req: Request) => {
   } catch (e) {
     return json(e instanceof RangeError ? 413 : 400, { error: "bad body" });
   }
-  const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
   const kind: string = body?.kind ?? "";
   const installId: string = body?.install_id ?? "";
-  if (!token || !installId || !kind) return json(400, { error: "missing fields" });
+  if (!installId || !kind) return json(400, { error: "missing fields" });
 
   try {
     // ── register: per-app fleet key auth (fleet_keys.api_key → app_id) ────
@@ -103,6 +127,7 @@ Deno.serve(async (req: Request) => {
         p_app_id: key.app_id, // authoritative: the key determines the app
         p_package_name: body.device?.package_name ?? null, // client self-report
       });
+      if (rpcErr?.code === "42501") return json(401, { error: "unauthorized" });
       if (rpcErr) throw new Error(rpcErr.message);
       return json(200, data);
     }

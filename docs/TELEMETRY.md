@@ -1,8 +1,9 @@
 # ringkit fleet telemetry — wire contract
 
 Telemetry is **off unless the app configures it** (`RingKitConfig.telemetry`). When enabled, a
-device ships only three things: a daily heartbeat, deduplicated incident reports, and — only
-when an operator requests it — a full log-buffer pull. Logs otherwise stay on the device.
+device sends registration/recovery polls, a daily heartbeat, deduplicated incident reports,
+user-requested reports, and — only when an operator requests it — a full log-buffer pull.
+Logs otherwise stay on the device.
 Uploads never use FCM or any high-priority channel and never run on the call-show path.
 
 ## Endpoint
@@ -43,7 +44,7 @@ Unknown **fields** are ignored (forward compatibility); unknown **kinds** are a 
   "pull_buffer": false,           // true = operator wants the full buffer next
   "sampled": false,
   "budget_kb": 200,               // per-device daily upload budget
-  "kill": false }                 // true = stop all telemetry traffic (sink keeps writing locally)
+  "kill": false }                 // true = stop data uploads; daily recovery poll remains
 ```
 
 Incident responses add `"duplicate": true|false` (idempotent-retry detection).
@@ -52,9 +53,10 @@ Incident responses add `"duplicate": true|false` (idempotent-retry detection).
 
 | Status | Meaning | Client behavior |
 |---|---|---|
-| 401 | bad apiKey / device token | re-register once, then back off |
+| 401 | missing/bad bearer token or registration belonging to another app | re-register once, then back off |
 | 413 | daily budget exceeded (body still returns the knobs) | keep files on device; retry after midnight |
-| 429 / 5xx | transient | exponential backoff; files stay on device — nothing is ever lost |
+| 413 | decompressed request exceeds 3 MiB (`error: "bad body"`) | reduce/chunk payload; retrying the same body will not help |
+| 429 / 5xx | transient | exponential backoff; files stay on device subject to local retention limits |
 
 Incident uploads are idempotent per (install_id, fingerprint, device_ts): a retried upload is
 acknowledged (`duplicate: true`) without a second stored payload. Pulls are exempt from the
@@ -67,7 +69,7 @@ budget (they are operator-initiated) and clear the `pull_buffer` flag when the l
 - **Incidents** ship once per fingerprint per device per UTC day, via an expedited WorkManager
   one-shot. Repeat occurrences stay local and reach the server as heartbeat fingerprint deltas.
   A snapshot that could not ship (offline, budget) is retried by the daily heartbeat's
-  reconciliation sweep — nothing is lost, arrival is just delayed.
+  reconciliation sweep, subject to bounded local retention; prolonged outages can lose older data.
 - **Heartbeats** run in one daily periodic WorkManager slot. Missed days ship as separate
   catch-up day-buckets (up to 7 kept) oldest-first; the newest beat carries the fingerprint
   deltas and `dropped_logs`. Same-day re-beats replace that day's counters server-side.
@@ -96,6 +98,46 @@ budget (they are operator-initiated) and clear the `pull_buffer` flag when the l
 - All tables are deny-by-default (no anonymous access); only the edge functions (service role)
   and the dashboard can touch data.
 
+## Backend deployment status
+
+The Flutter plugin works without a telemetry backend. The `supabase/` directory is a
+**partial reference implementation**, not a turnkey fresh-project deployment: the base
+tables, bookkeeping RPCs, private storage bucket and scheduled jobs are not all represented
+by checked-in bootstrap migrations. Do not apply the delta migrations to an empty project
+or treat the SQL test fixture as a production schema.
+
+For an existing compatible backend, review and deploy the registration-ownership migration,
+updated `checkin` and `purge` functions, and dashboard together. The repository does not
+automatically deploy any of them. Before exposing a deployment to external users:
+
+- Verify base-schema/RLS/service-role privileges and storage access on your own project.
+- Configure a strong, separate server-only **`RINGKIT_PURGE_SECRET`** for the purge function
+  and its scheduler. Purge now rejects requests when this variable is absent, and never
+  falls back to a client fleet key. Update existing cron HTTP Authorization headers to use
+  the separate secret through your server-side secret store; otherwise retention stops.
+  Never put this credential in apps, source, dashboard responses or logs.
+- Verify that the deployed purge rejects client keys, and registration cannot move an
+  existing install to another app or return that install's token to it.
+- Restrict the dashboard to trusted **all-app administrators**. Its app selector is only a
+  filter; its password also permits fleet-key management and sensitive log-buffer pulls.
+- Review historical deployment logs and rotate credentials if exposure is suspected.
+
+Purge is an operator-only endpoint: `POST /functions/v1/purge` with
+`Authorization: Bearer <RINGKIT_PURGE_SECRET>`. Its optional body is
+`{"max_age_days":60}`. A value of `0` deletes all eligible telemetry rows/payloads and
+must never be used as a routine health check.
+
+Offline regression commands (from the repository root):
+
+```bash
+deno test --config supabase/tests/deno.json --allow-env supabase/tests/security_test.ts
+deno check supabase/functions/checkin/index.ts supabase/functions/purge/index.ts
+bash supabase/tests/registration.sh  # isolated PostgreSQL 16 container; requires Docker
+node --test tools/telemetry-dashboard/dashboard.test.mjs
+```
+
+These tests use only synthetic credentials and never contact a live backend.
+
 ## Multiple apps (per-app keys)
 
 The backend is multi-app: every device carries an `app_id`, and `app_id` is decided by the **fleet
@@ -115,6 +157,10 @@ Hand that app's developer *its* key + the endpoint. Every device running that ap
 `join fleet_keys` or a `where app_id = …`. A common key across apps still works (they'd share one
 `app_id`) but you lose per-app attribution, budgeting, and revocation — prefer one key per app.
 `device.package_name` is stored next to `app_id` as a self-reported cross-check (flag mismatches).
+An existing installation is bound to its app: another app's key cannot reassign it or recover
+its token. Same-app re-registration preserves the token and refreshes device metadata.
+Fleet keys embedded in apps are registration credentials, not trustworthy proof of user or
+device identity; protect the ingest service with appropriate abuse controls for your deployment.
 
 ## Cost model
 

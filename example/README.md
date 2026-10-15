@@ -1,9 +1,10 @@
 # ringkit_example
 
 The **manual test harness + integration reference** for ringkit — not a demo.
-Three tabs: **Harness** (every call scenario + live event console with `deliveryPath`/`sequence`
+Four tabs: **Harness** (every call scenario + live event console with `deliveryPath`/`sequence`
 badges + latency probe), **Diagnostics** (`diagnose()` as a fix-it checklist with deep links +
-ring-trace viewer), **Permissions** (the recommended onboarding flow).
+ring-trace viewer), **Permissions** (the recommended onboarding flow), and **Telemetry**
+(off-by-default configuration and report controls).
 
 ## Backend-free triggers (adb)
 
@@ -25,8 +26,9 @@ Every `SIMULATE_CALL` stamps `probeReceiptMs` into `extra` — the harness conso
 1. Trigger a call, let it ring, **swipe the app away** (or `adb shell am kill $PKG` — note: only
    works while the app is background and holds no foreground service).
 2. Act on the notification (accept/decline) — the native core handles it with **no Flutter engine**.
-3. Relaunch the app: the event console replays the outcome (`[replayed]` badge) and, for accept,
-   `consumeLaunchAction()` reports the one-shot launch cause with the same sequence number.
+3. Relaunch the app: unconsumed outcomes replay (`[replayed]` badge). An actionable event
+   already completed by the registered headless handler is acknowledged and does not replay.
+   For accept, `consumeLaunchAction()` reports the one-shot launch cause.
 
 **The trap:** *swipe-away / `am kill` = killed* — FCM (and these local triggers) still
 arrive. **Settings → Force stop / `adb shell am force-stop` = STOPPED state** — Android delivers
@@ -36,6 +38,9 @@ so use `am kill` for killed-state tests.
 
 ## FCM (Mode 1 / Mode 2)
 
-Real-push wiring (`firebase_messaging` + `tools/send_call.sh`, HTTP v1 + service account) lands
-with the Mode-2 milestone — this harness is deliberately Firebase-free until then so the
-no-Firebase consumer build stays honest.
+Real-push wiring is included (`firebase_messaging` + `tools/send_call.sh`, HTTP v1 + service
+account), with Mode 2 enabled in the example manifest. Supply your own ignored Firebase
+configuration for real pushes; see [FCM integration](../docs/FCM.md). Firebase initialization
+is optional, so the local ADB harness works without a Firebase project. Never commit client
+configuration or service-account credentials. Telemetry is also optional and requires your
+own backend and per-app key; see [Telemetry](../docs/TELEMETRY.md).
