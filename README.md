@@ -14,7 +14,7 @@ answered or declined."* You bring the push transport (FCM) and the media stack (
 WebRTC). Built from scratch on 2026 SDKs as a ground-up replacement for `flutter_callkit_incoming`,
 engineered against that plugin's entire issue history (474 Android issues audited into the design).
 
-> **Preview.** MIT-licensed; install from Git (not published on pub.dev).
+> **Preview.** MIT-licensed and Android-only.
 > Fleet telemetry is **off by default**. Opting in sends diagnostic data to the backend you
 > configure; no telemetry endpoint or credentials are bundled. See [Telemetry](https://github.com/wibe-chat/ringkit/blob/main/docs/TELEMETRY.md).
 
@@ -56,8 +56,21 @@ engineered against that plugin's entire issue history (474 Android issues audite
 
 ## Install
 
+```sh
+flutter pub add ringkit
+```
+
+Or add the dependency to your app:
+
 ```yaml
 # pubspec.yaml
+dependencies:
+  ringkit: ^0.2.0
+```
+
+To use unreleased changes, install from Git instead:
+
+```yaml
 dependencies:
   ringkit:
     git:

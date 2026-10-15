@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-10-15
+
+First pub.dev release. Includes the features from the earlier Git-only preview
+and the additions below. The historical `v0.2.0` Git tag identifies the earlier
+Git preview, not this package archive.
 
 Public-preview preparation and telemetry hardening:
 
@@ -48,9 +52,9 @@ Telecom module (device-verified on API 26–36, including cold-process starts):
 - **Android 16 promoted ("Live Updates") ongoing notification:** the in-call notification
   requests promotion + shows a status-bar chip on API 36; below 36 nothing changes.
 
-## 0.2.0 — 2026-07-05
+### Earlier Git-only preview — 2026-07-05
 
-First integration-ready release: plan Phases 0–2 (Mode 1) complete and device-verified.
+First integration-ready Git preview: Mode 1 complete and device-verified.
 
 - **Core lifecycle** in every app state (foreground/background/killed/locked/Doze):
   `showIncomingCall` → ring + full-screen + CallStyle notification → accept / decline /
@@ -71,9 +75,9 @@ First integration-ready release: plan Phases 0–2 (Mode 1) complete and device-
 - Robustness: reconciliation sweep, tombstones/pre-tombstones (out-of-order cancel), staleness
   guard (`expired`), backup-safe persistence (no ghost calls after a cloud restore), R8-safe resources.
 
-Not yet in this release (see README status table): headless background-handler execution and the
-Mode 2 native FCM path (Phase 3), telecom (Phase 4), telemetry upload (config accepted
-but inert).
+That earlier preview did not yet include headless background-handler execution,
+the Mode 2 native FCM path, telecom or telemetry uploads. These are included in
+the first pub.dev release described above; telemetry remains opt-in.
 
 ## 0.0.1
 

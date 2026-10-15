@@ -73,10 +73,11 @@ is proven.
 
 ## References
 
-After publication, verify the package page and test installation in a fresh
-Android Flutter app using `flutter pub add ringkit`. Update the README's
-Git-only installation notice and release notes only after the version is
-actually visible on pub.dev.
+Prepare the archive's README installation instructions and release notes before
+uploading, but do not announce publication or push release-status documentation
+until the version is actually visible on pub.dev. After publication, verify the
+package page and test installation in a fresh Android Flutter app using
+`flutter pub add ringkit`.
 
 - [Dart: Publishing packages](https://dart.dev/tools/pub/publishing)
 - [Dart: `dart pub publish`](https://dart.dev/tools/pub/cmd/pub-lish)
