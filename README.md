@@ -5,6 +5,10 @@
 ![license](https://img.shields.io/badge/license-MIT-purple)
 ![state](https://img.shields.io/badge/status-preview-orange)
 
+**RingKit** is an open-source Flutter plugin from the team behind [Wibe Chat](https://wibechat.com) that handles the hardest part of building a calling app on Android: making the phone actually ring. It delivers a native, CallKit-style incoming-call experience — a full-screen lock-screen UI, heads-up notification, ringtone and vibration — that works reliably whether the app is in the foreground, background, killed, or in Doze. Accept, decline and timeout events survive process death and replay on next launch, and an opt-in native FCM path rings from a cold start in under 300ms.
+RingKit handles signaling only — the moment between a call push arriving and the user answering. You bring the push transport (FCM) and the media stack. It pairs naturally with [Wibe Chat](https://wibechat.com) — our unified SDK for in-app [voice and video calling](https://wibechat.com/products/voice) — but stays provider-agnostic and works with LiveKit, Agora or raw WebRTC too. MIT-licensed and built by [Zartek](https://www.zartek.in/).
+
+
 **A CallKit-style incoming-call plugin for Flutter, Android-only.** Ringtone + vibration, a
 full-screen lock-screen call UI, a CallStyle notification, missed-call surfaces, and **reliable
 event delivery in every app state** — foreground, background, killed, locked, and Doze.
