@@ -2,6 +2,10 @@ package com.wibechat.ringkit.diag
 
 import android.app.NotificationManager
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.PackageManager
+import android.media.AudioManager
+import android.os.VibratorManager
 import androidx.test.core.app.ApplicationProvider
 import com.wibechat.ringkit.core.IncomingCallOrchestrator
 import com.wibechat.ringkit.core.RingKitCore
@@ -50,6 +54,48 @@ class DiagnosticsTest {
     private fun ensureChannels() =
         CallNotificationFactory(context, core.repository.currentConfig(), core.time, core.ringLog, { 424200 })
             .ensureChannels()
+
+    @Test
+    fun r37_zero_ring_volume_reports_warning_without_changing_volume() {
+        val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audio.ringerMode = AudioManager.RINGER_MODE_NORMAL
+        audio.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
+        assertEquals(DiagnosticsEngine.Severity.WARNING, findings().getValue("ringVolumeZero").severity)
+        assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_RING))
+        audio.setStreamVolume(AudioManager.STREAM_RING, 3, 0)
+        assertFalse(findings().containsKey("ringVolumeZero"))
+    }
+
+    @Test
+    fun r5_absent_vibrator_reports_warning() {
+        val vibrator = (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+        shadowOf(vibrator).setHasVibrator(false)
+        assertEquals(DiagnosticsEngine.Severity.WARNING, findings().getValue("vibratorUnavailable").severity)
+        shadowOf(vibrator).setHasVibrator(true)
+        assertFalse(findings().containsKey("vibratorUnavailable"))
+    }
+
+    @Test
+    fun r5_unreadable_manifest_reports_unknown_vibration_permission() {
+        val missingPackage = object : ContextWrapper(context) {
+            override fun getPackageName(): String = "com.example.uninstalled"
+        }
+        val all = DiagnosticsEngine.run(missingPackage, core).associateBy { it.id }
+        assertEquals(DiagnosticsEngine.Severity.WARNING, all.getValue("vibrationPermissionUnknown").severity)
+        assertFalse(all.containsKey("manifestVibrateRemoved"))
+        assertFalse(findings().containsKey("vibrationPermissionUnknown"))
+    }
+
+    @Test
+    fun r5_removed_vibrate_permission_reports_warning() {
+        val info = context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
+        info.requestedPermissions = info.requestedPermissions.orEmpty().filterNot { it == "android.permission.VIBRATE" }.toTypedArray()
+        shadowOf(context.packageManager).installPackage(info)
+        assertEquals(DiagnosticsEngine.Severity.WARNING, findings().getValue("manifestVibrateRemoved").severity)
+        info.requestedPermissions = (info.requestedPermissions.orEmpty().toList() + "android.permission.VIBRATE").toTypedArray()
+        shadowOf(context.packageManager).installPackage(info)
+        assertFalse(findings().containsKey("manifestVibrateRemoved"))
+    }
 
     // ── channel findings (§8.11 rows read back) ──────────────────────────
 

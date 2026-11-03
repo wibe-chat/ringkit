@@ -27,6 +27,7 @@ import com.wibechat.ringkit.core.RingLog
 import com.wibechat.ringkit.core.CallActionReceiver
 import com.wibechat.ringkit.ui.CallNotificationFactory
 import com.wibechat.ringkit.ui.RingKitChannels
+import com.wibechat.ringkit.ui.RingAudioState
 import com.wibechat.ringkit.ui.RingtonePlayer
 
 /**
@@ -63,7 +64,20 @@ class RingingService : Service() {
             val record = core.repository.callFor(callId) ?: return
             val player = sharedPlayer(context, core)
             val anyInCall = core.repository.activeCalls().any { it.state != CoreCallState.RINGING }
+            fallbackSubscription?.close()
+            fallbackSubscription = null
             val outcome = player.start(record, core.repository.currentConfig().defaultRingtone, anyInCall)
+            val session = player.sessionToken
+            fallbackSubscription = core.bus.subscribe {
+                val calls = core.repository.activeCalls()
+                if (player.sessionToken != session ||
+                    calls.none { it.callId == callId && it.state == CoreCallState.RINGING } ||
+                    calls.any { it.state != CoreCallState.RINGING }) {
+                    fallbackSubscription?.close()
+                    fallbackSubscription = null
+                    player.stopSession(session)
+                }
+            }
             core.ringLog.log(
                 CoreLogLevel.INFO, "svc", "RingingService.bestEffortInProcessRing", callId,
                 "in_process_ring", mapOf("audible" to outcome.audible.toString(), "engine" to (outcome.engine ?: "none")),
@@ -80,12 +94,13 @@ class RingingService : Service() {
         // double-play; whoever stops next stops this instance.
         @Volatile
         private var processPlayer: RingtonePlayer? = null
+        private var fallbackSubscription: AutoCloseable? = null
 
         internal fun sharedPlayer(context: Context, core: RingKitCore.Instance): RingtonePlayer {
             processPlayer?.let { return it }
             synchronized(this) {
                 processPlayer?.let { return it }
-                val created = RingtonePlayer(context.applicationContext, core.ringLog)
+                val created = RingtonePlayer(context.applicationContext, core.ringLog, dispatchPlayback = { core.writer.post(it) })
                 processPlayer = created
                 return created
             }
@@ -100,6 +115,7 @@ class RingingService : Service() {
     /** Writer-confined state. */
     private var audioOwnerCallId: String? = null
     private var audioOwnerAudible = false
+    private var audioSession: Long? = null
     private var foregroundCallId: String? = null
     private val timerTokens = HashMap<String, Any>()
 
@@ -139,7 +155,7 @@ class RingingService : Service() {
         isRunning = false
         busSubscription?.let { runCatching { it.close() } }
         busSubscription = null
-        core.writer.post { sharedPlayer(this, core).stop() }
+        core.writer.post { audioSession?.let { sharedPlayer(this, core).stopSession(it) } }
         main.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
@@ -288,7 +304,15 @@ class RingingService : Service() {
         } else if (audioOwnerCallId != owner.callId) {
             audioOwnerCallId = owner.callId
             player.stop()
-            val outcome = player.start(owner, config.defaultRingtone, anyInCallState = false)
+            val ownerCallId = owner.callId
+            val outcome = player.start(owner, config.defaultRingtone, anyInCallState = false) { state ->
+                // Playback errors/checks may run on main; repository reads and
+                // deadline updates stay on the service's writer.
+                core.writer.post { onAudioStateChanged(ownerCallId, state) }
+            }
+            audioSession = player.sessionToken
+            fallbackSubscription?.close()
+            fallbackSubscription = null
             audioOwnerAudible = outcome.audible
             core.trace.trace(
                 "ring", owner.callId,
@@ -319,6 +343,16 @@ class RingingService : Service() {
                     )
                 }
         }
+    }
+
+    /** Later playback failure must activate the same backstop as an initially silent ring. */
+    private fun onAudioStateChanged(expectedCallId: String, state: RingAudioState) {
+        if (audioOwnerCallId != expectedCallId) return
+        val record = core.repository.callFor(expectedCallId)
+            ?.takeIf { it.state == CoreCallState.RINGING } ?: return
+        audioOwnerAudible = state is RingAudioState.Playing
+        core.trace.trace("ring", expectedCallId, "audio state: $state")
+        if (!audioOwnerAudible) armNoAudioBackstop(record)
     }
 
     /**

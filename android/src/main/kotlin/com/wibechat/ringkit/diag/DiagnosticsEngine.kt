@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Build
 import android.os.PowerManager
+import android.os.Vibrator
+import android.os.VibratorManager
 import com.wibechat.ringkit.core.RingKitCore
 import com.wibechat.ringkit.ui.RingKitChannels
 
@@ -120,6 +122,46 @@ object DiagnosticsEngine {
                         "Ringer mode is VIBRATE right now — calls vibrate without sound.",
                         "Informational.",
                     )
+        }
+        if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL &&
+            (audioManager.getStreamVolume(AudioManager.STREAM_RING) == 0 ||
+                audioManager.isStreamMute(AudioManager.STREAM_RING))
+        ) {
+            findings += Finding(
+                "ringVolumeZero", Severity.WARNING,
+                "Ringer mode is NORMAL but the ring stream is muted or at zero volume.",
+                "Raise the device ring volume in system sound settings.",
+            )
+        }
+        val vibrator = if (Build.VERSION.SDK_INT >= 31) {
+            (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
+        if (!vibrator.hasVibrator()) {
+            findings += Finding(
+                "vibratorUnavailable", Severity.WARNING,
+                "This device reports no vibration hardware — incoming calls cannot vibrate.",
+                "Use sound and visual incoming-call alerts on this device.",
+            )
+        }
+        val vibrateDeclared = runCatching {
+            context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
+                .requestedPermissions?.contains("android.permission.VIBRATE") == true
+        }.getOrNull()
+        if (vibrateDeclared == null) {
+            findings += Finding(
+                "vibrationPermissionUnknown", Severity.WARNING,
+                "The app manifest could not be inspected — VIBRATE permission status is unknown.",
+                "Retry diagnostics and verify android.permission.VIBRATE in the app's merged manifest.",
+            )
+        } else if (!vibrateDeclared) {
+            findings += Finding(
+                "manifestVibrateRemoved", Severity.WARNING,
+                "VIBRATE is missing from the merged manifest — vibration requests cannot succeed.",
+                "Restore android.permission.VIBRATE in the app's merged manifest.",
+            )
         }
         val filter = notificationManager.currentInterruptionFilter
         if (filter != NotificationManager.INTERRUPTION_FILTER_ALL &&

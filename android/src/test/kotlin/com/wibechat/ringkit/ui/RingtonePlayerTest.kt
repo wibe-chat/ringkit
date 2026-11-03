@@ -40,7 +40,7 @@ class RingtonePlayerTest {
     private val notificationManager: NotificationManager
         get() = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-    private fun player() = RingtonePlayer(context, RingLog(TestSupport.newTempDir(), FakeTime()) { _, _ -> })
+    private fun player() = RingtonePlayer(context, RingLog(TestSupport.newTempDir(), FakeTime()) { _, _ -> }, dispatchPlayback = { it() })
 
     private fun record(vibrate: Boolean = true): CallRecord {
         val time = FakeTime()
@@ -60,6 +60,45 @@ class RingtonePlayerTest {
             connectionDeadlineElapsedMs = null,
             surfacePosted = true,
         )
+    }
+
+    @Test
+    @Config(sdk = [33])
+    fun r5_missing_vibrator_does_not_report_vibration() {
+        audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+        val vibrator = (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+        shadowOf(vibrator).setHasVibrator(false)
+        val outcome = player().start(record(), null, false)
+        assertFalse(outcome.vibrating)
+    }
+
+    @Test
+    fun r37_failed_primary_data_source_releases_allocated_player() {
+        audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+        val players = mutableListOf<org.robolectric.shadows.ShadowMediaPlayer>()
+        org.robolectric.shadows.ShadowMediaPlayer.setCreateListener { _, shadow -> players.add(shadow) }
+        val player = player()
+        player.start(record(vibrate = false), "file:///missing-ringtone.wav", false)
+        assertTrue(players.isNotEmpty())
+        assertEquals(org.robolectric.shadows.ShadowMediaPlayer.State.END, players.first().state)
+        player.stop()
+    }
+
+    @Test
+    fun r37_async_primary_error_releases_player_and_starts_bundled_fallback() {
+        audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+        val players = mutableListOf<org.robolectric.shadows.ShadowMediaPlayer>()
+        org.robolectric.shadows.ShadowMediaPlayer.setCreateListener { _, shadow -> players.add(shadow) }
+        org.robolectric.shadows.ShadowMediaPlayer.setMediaInfoProvider { org.robolectric.shadows.ShadowMediaPlayer.MediaInfo() }
+        val player = player()
+        player.start(record(vibrate = false), "file:///test-ringtone.wav", false)
+        val primary = players.first()
+        primary.invokeErrorListener(1, -19)
+        assertEquals(org.robolectric.shadows.ShadowMediaPlayer.State.END, primary.state)
+        assertEquals(2, players.size)
+        assertTrue(players.last().isReallyPlaying)
+        assertEquals(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE, players.last().audioAttributes.usage)
+        player.stop()
     }
 
     // ── resolver (§8.4) ──────────────────────────────────────────────────

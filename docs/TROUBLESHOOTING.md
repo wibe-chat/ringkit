@@ -25,10 +25,10 @@ adb logcat -s RingKit:V     # the per-call ring trace: what it did and WHY (incl
 2. **Did it return `expired`?** → the push arrived *after* `timeoutSeconds` (network delay). ringkit
    recorded a missed call and did not ring — by design. Send `sentAtEpochMs` and check your push
    latency.
-3. **Did it return `degraded`?** → it *did* ring, with caveats in `result.degradations` (e.g. a
-   pinned heads-up instead of full-screen). See [Degradations](#degradations-rang-but-not-fully).
-4. **Did it return `shown`, but you heard nothing?** → the device is in silent/vibrate/DND, or the
-   ringtone channel is muted. The ring trace says which. See [Silent but "shown"](#silent-but-shown).
+3. **Did it return `degraded`?** → a fallback was used, described in `result.degradations` (e.g. a
+   pinned heads-up instead of full-screen). This does not prove audible playback. See [Degradations](#degradations-rang-but-not-fully).
+4. **Did it return `shown`, but you heard nothing?** → inspect ringer/DND policy, ring volume,
+   audio focus, and playback failures in the ring trace and diagnostics. See [Silent but "shown"](#silent-but-shown).
 5. **Did `showIncomingCall` never run at all?** → the push didn't reach your app. See
    [The push never arrived](#the-push-never-arrived) — usually **force-stop** or FCM priority.
 
@@ -45,8 +45,8 @@ sound** (invisible ringing is banned). Fix the precondition, then future calls r
 
 ## Degradations (rang, but not fully)
 
-`result.code == degraded` — it rang; `result.degradations` lists sanctioned fallbacks. None of these
-stop the ring.
+`result.code == degraded` — `result.degradations` lists the fallback paths used. Sound still depends
+on device policy, successful playback, and the lifetime of the ringing process.
 
 | Degradation | What the user sees | Remedy |
 |---|---|---|
@@ -58,15 +58,28 @@ stop the ring.
 
 ## Silent but "shown"
 
-The call rang visually but you heard nothing. This is **usually correct behavior**, and the ring
-trace (`adb logcat -s RingKit:V`) states the reason:
+A visible incoming-call notification does not prove audible playback. Capture `diagnose()` and
+`adb logcat -s RingKit:V` immediately after reproducing:
 
-- Device in **silent** or **vibrate** mode → ringkit honors it (vibrates in vibrate mode).
-- **Do Not Disturb** → silenced unless the caller is an allowed exception.
-- The **ringtone channel** was muted by the user → surfaces as `channelDemoted`.
+- **Silent/vibrate/DND:** ringkit honors device policy. Vibration also requires the call's
+  `vibrate` option. On Android 13 and below, DND suppresses calls conservatively; Android 14+
+  supports checking caller exceptions.
+- **Ring volume:** `ringVolumeZero` warns when normal ringer mode still has a muted or zero-volume
+  ring stream. Restore the volume through system sound settings.
+- **Playback:** inspect the selected engine, focus result, startup errors and fallback transitions.
+  The ladder tries MediaPlayer, the system Ringtone player for supported content URIs, then the
+  bundled tone. A playing-state check cannot establish that sound was physically audible.
+- **Vibration:** `vibratorUnavailable` identifies absent hardware and `manifestVibrateRemoved`
+  identifies a missing merged `VIBRATE` permission. A successful vibration API request does not
+  prove physical vibration; device settings can still suppress it.
 
-ringkit never forces sound over the user's ringer policy. If you expected sound in normal mode and
-didn't get it, check `diagnose()` for a `channelDemoted` finding.
+The normal incoming-call channel is deliberately silent: the ringing foreground service owns sound
+and vibration. `channelDemoted` explains missing heads-up presentation, not a muted ringtone stream.
+The separate audible fallback channel matters when the foreground service is denied; inspect
+`audibleFallbackDegraded` in that case. Do not enable channel sound to work around a player failure,
+as that can produce duplicate ringing.
+
+ringkit never forces sound or vibration over the user's ringer/DND policy.
 
 ## The push never arrived
 
