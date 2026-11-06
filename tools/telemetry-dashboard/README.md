@@ -1,9 +1,10 @@
 # ringkit fleet — telemetry administrator dashboard
 
-A password-protected web dashboard for **trusted fleet administrators**. It shows **all apps**: browse devices,
-drill into a device's incidents, read the decompressed black-box log per incident,
-and change diagnostic controls (raise a device's capture level, request a
-full-buffer pull). It runs as a single **Netlify Function** that reads Supabase with
+A password-protected web dashboard for **trusted fleet administrators**. It shows
+daily call outcomes, device/Android failure heatmaps, grouped issues, captured log
+timelines and missing check-ins across **all apps**. Browse devices and change
+diagnostic controls (raise a device's capture level, request a full-buffer pull).
+It runs as a single **Netlify Function** that reads Supabase with
 the service role — so the powerful key stays server-side and never reaches the browser.
 
 The password grants **all-app administrator access**, including listing, creating,
@@ -78,7 +79,44 @@ deployment access separately from app-key distribution.
   use them only with appropriate tester consent. Key deletion/revocation can disrupt
   registration. The kill switch and budgets are not exposed here.
 
+## Reading the analytics
+
+- **Overview:** select an app and 7, 30 or 60 days, or a custom range up to 60 days.
+  Trends and the manufacturer/model/Android API heatmap use completed UTC days.
+  Heartbeat rollups arrive asynchronously: a gap means no rollup was reported.
+  Refresh after late data is rolled up. Heartbeat retry behavior can also repeat
+  counters; these reports are operational telemetry, not billing records.
+- **Outcomes:** accepts do not prove media connected. Daily counters are events,
+  not distinct calls or a cohort. Show-failure rate is failures divided by shows
+  plus failures; degradation events are separate and can occur several times for
+  one call. Reporting device-days summed across dates are not unique devices.
+- **Issues:** the all-app view shows fleet-wide occurrences and affected devices.
+  Selecting an app counts only its affected devices. Per-app occurrences are
+  unavailable in the current schema and are displayed as unavailable; issue dates
+  remain fleet-wide.
+- **Timeline:** search retained incident/pull uploads by app, install UUID, exact
+  metadata call ID and upload date. A payload can contain several calls; the exact
+  call-ID filter inside the log applies to individual records. Records are ordered
+  by boot count and elapsed time where available. This is captured diagnostic
+  context, not a complete history of healthy calls.
+- **Missing check-ins:** choose 24, 48, 72 or 168 hours since last contact. This does
+  not determine whether a device is offline, uninstalled or affected by OEM policy.
+  Existing capture and pull controls remain available from a device.
+
+Devices, check-ins and upload timelines have 200-row pages. Aggregate reads stop
+at 20,000 rows and issues display at most 200 groups; an explicit warning marks
+partial reports. Narrow the app/date selection when a cap is reached. Very large
+fleets may need database-side aggregates to avoid these bounds. Log downloads are
+limited to 4 MiB compressed and 6 MiB decompressed; oversized requests are rejected.
+At most the latest 10,000 JSONL records are returned, with a visible truncation
+notice, and the viewer initially renders 500 records with a load-more control.
+
+Analytics uses the existing telemetry tables and private log bucket; it requires
+no database migration or mobile SDK update. Alert delivery is not configured.
+
 ## Offline regression tests
 
-Run `node --test tools/telemetry-dashboard/dashboard.test.mjs` from the repository root.
-Tests use synthetic credentials and do not contact a backend.
+Run `node --test tools/telemetry-dashboard/*.test.mjs` from the repository root.
+Tests use synthetic credentials and do not contact a backend. They cover
+authentication, app scope, UTC ranges, pagination and truncation, clock ordering,
+private-bucket path validation, bounded payloads and browser navigation races.

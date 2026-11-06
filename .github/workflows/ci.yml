@@ -121,8 +121,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: isolated PostgreSQL contract and security tests
         run: bash supabase/tests/fresh.sh
-      - name: administrator dashboard security tests
-        run: node --test tools/telemetry-dashboard/dashboard.test.mjs
+      - name: administrator dashboard security and analytics tests
+        run: node --test tools/telemetry-dashboard/*.test.mjs
 
   emulator:
     name: emulator API ${{ matrix.api-level }} (integration + killed-state harness)

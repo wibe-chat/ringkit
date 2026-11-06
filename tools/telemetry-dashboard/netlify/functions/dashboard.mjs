@@ -1,6 +1,6 @@
 // ringkit fleet telemetry — administrator dashboard (Netlify Function, Node).
 //
-// One self-contained, ZERO-DEPENDENCY function serves the HTML dashboard AND its
+// One ZERO-DEPENDENCY function serves the HTML dashboard AND its
 // JSON API (so it deploys by drag-and-drop with no build step). It reads every
 // telemetry table over Supabase's REST API with the SERVICE ROLE key (the tables
 // are deny-all RLS, so only this — or Studio — can see them). Access is for
@@ -15,13 +15,16 @@
 //   SUPABASE_URL                — https://<ref>.supabase.co
 //   SUPABASE_SERVICE_ROLE_KEY   — Supabase → Settings → API → service_role (secret)
 
+import { InputError, report, readAll, orderRecords } from "../lib/analytics.mjs";
+import { REPORT_STYLE, REPORT_CONTROLS, REPORT_CLIENT } from "../lib/analytics-ui.mjs";
+
 const SB = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
 const SR = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const AUTH = { apikey: SR, Authorization: "Bearer " + SR };
 const LEVELS = ["none", "error", "info", "verbose"];
 
 function json(status, body) {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 }
 
 // PostgREST query → parsed JSON array (or null). opts: {method, body, headers}.
@@ -39,8 +42,21 @@ async function rest(pathAndQuery, opts = {}) {
 // Exact row count via the Content-Range header (Prefer: count=exact).
 async function count(pathAndQuery) {
   const r = await fetch(SB + "/rest/v1/" + pathAndQuery, { headers: Object.assign({ Prefer: "count=exact" }, AUTH) });
-  const cr = r.headers.get("content-range") || "*/0";
-  return parseInt(cr.split("/")[1] || "0", 10) || 0;
+  if (!r.ok) throw new Error("count failed");
+  const total = r.headers.get("content-range")?.match(/\/(\d+)$/)?.[1];
+  if (total === undefined) throw new Error("count unavailable");
+  return Number(total);
+}
+
+async function restPage(path, offset, limit) {
+  const r = await fetch(SB + "/rest/v1/" + path + "&offset=" + offset + "&limit=" + limit, {
+    headers: { ...AUTH, Prefer: "count=exact" }, signal: AbortSignal.timeout(15000),
+  });
+  const total = r.headers.get("content-range")?.match(/\/(\d+)$/)?.[1];
+  if ((!r.ok && r.status !== 416) || total === undefined) throw new Error("page unavailable");
+  const rows = r.status === 416 ? [] : await r.json();
+  if (!Array.isArray(rows) || rows.length > limit) throw new Error("invalid page");
+  return { rows, total: Number(total) };
 }
 
 function safeEqual(a, b) {
@@ -57,9 +73,28 @@ async function authed(req) {
   return !!pw && !!key && safeEqual(key, pw);
 }
 
-async function gunzipText(bytes) {
+class PayloadTooLarge extends Error {}
+async function boundedBytes(stream, maximum) {
+  const reader = stream.getReader(), parts = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maximum) { await reader.cancel(); throw new PayloadTooLarge(); }
+      parts.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const part of parts) { bytes.set(part, offset); offset += part.length; }
+  return bytes;
+}
+async function gunzipText(body) {
+  const bytes = await boundedBytes(body, 4 * 1024 * 1024);
   const stream = new Response(bytes).body.pipeThrough(new DecompressionStream("gzip"));
-  return await new Response(stream).text();
+  return new TextDecoder().decode(await boundedBytes(stream, 6 * 1024 * 1024));
 }
 
 // Strong random fleet key (48 hex chars) — Web Crypto, global on Node 18+/Netlify.
@@ -81,23 +116,19 @@ export default async (req) => {
   if (!SB || !SR) return json(500, { error: "server not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)" });
   try {
     if (!(await authed(req))) return json(401, { error: "unauthorized" });
+    if (["analytics", "silent", "timeline", "issues", "devices"].includes(api)) {
+      if (req.method !== "GET") return json(405, { error: "GET required" });
+      return json(200, await report(api, url, restPage));
+    }
     if (api === "summary") {
-      const [devices, openIssues, apps] = await Promise.all([
+      const [devices, openIssues, apps, keys] = await Promise.all([
         count("devices?select=install_id&limit=1"),
         count("issues?select=fingerprint&status=eq.open&limit=1"),
-        rest("devices?select=app_id"),
+        readAll(restPage, "devices?select=app_id,install_id&order=app_id.asc,install_id.asc"),
+        readAll(restPage, "fleet_keys?select=app_id&order=app_id.asc,api_key.asc"),
       ]);
-      const appList = [...new Set((apps || []).map((r) => r.app_id ?? "default"))].sort();
-      return json(200, { devices, openIssues, apps: appList });
-    }
-
-    if (api === "devices") {
-      const app = url.searchParams.get("app") ?? "";
-      const q = url.searchParams.get("q") ?? "";
-      let qs = "devices?select=install_id,app_id,package_name,device_label,manufacturer,model,sdk_int,app_version,plugin_version,last_seen,log_level,pull_requested,sampled,killed,bytes_today&order=last_seen.desc&limit=500";
-      if (app) qs += "&app_id=eq." + enc(app);
-      if (q) qs += "&device_label=ilike.*" + enc(q) + "*";
-      return json(200, { devices: (await rest(qs)) || [] });
+      const appList = [...new Set([...apps.rows, ...keys.rows].map((r) => r.app_id ?? "default"))].sort();
+      return json(200, { devices, openIssues, apps: appList, appsTruncated: apps.truncated || keys.truncated });
     }
 
     if (api === "device") {
@@ -118,30 +149,24 @@ export default async (req) => {
       return json(200, { device: dev[0], incidents, heartbeats: hb || [] });
     }
 
-    if (api === "issues") {
-      const app = url.searchParams.get("app") ?? "";
-      let fpFilter = null;
-      if (app) {
-        const appDevs = await rest("devices?select=install_id&app_id=eq." + enc(app));
-        const ids = (appDevs || []).map((d) => d.install_id);
-        const id2 = ids.length ? await rest("issue_devices?select=fingerprint&install_id=in.(" + ids.map(enc).join(",") + ")") : [];
-        fpFilter = [...new Set((id2 || []).map((r) => r.fingerprint))];
-      }
-      let qs = "issues?select=fingerprint,incident_type,codepoint,degradations,device_count,occurrence_count,status,first_seen,last_seen&order=device_count.desc,occurrence_count.desc&limit=200";
-      if (fpFilter) qs += "&fingerprint=in.(" + (fpFilter.length ? fpFilter.map(enc).join(",") : "__none__") + ")";
-      return json(200, { issues: (await rest(qs)) || [] });
-    }
-
     if (api === "payload") {
       const path = url.searchParams.get("path") ?? "";
-      if (!/^(incidents|pulls)\/[A-Za-z0-9\-/.]+\.gz$/.test(path)) return json(400, { error: "bad path" });
-      const r = await fetch(SB + "/storage/v1/object/ringkit-logs/" + path, { headers: AUTH });
+      if (!/^(incidents|pulls)\/[A-Za-z0-9\-/.]+\.gz$/.test(path) || path.split("/").some((segment) => !segment || segment === "." || segment === "..")) return json(400, { error: "bad path" });
+      const r = await fetch(SB + "/storage/v1/object/ringkit-logs/" + path, { headers: AUTH, signal: AbortSignal.timeout(15000) });
       if (!r.ok) return json(404, { error: "no payload" });
-      const text = await gunzipText(new Uint8Array(await r.arrayBuffer()));
-      const records = text.split("\n").filter((l) => l.trim()).map((l) => {
-        try { return JSON.parse(l); } catch { return { _raw: l }; }
+      const text = await gunzipText(r.body);
+      // Keep a bounded tail without allocating an array for millions of tiny lines.
+      const lines = [], recordLimit = 10000;
+      let end = text.length;
+      while (end > 0 && lines.length <= recordLimit) {
+        const start = text.lastIndexOf("\n", end - 1), line = text.slice(start + 1, end).trim();
+        if (line) lines.push(line);
+        end = start;
+      }
+      const records = lines.slice(0, recordLimit).reverse().map((l) => {
+        try { const record = JSON.parse(l); return record && typeof record === "object" && !Array.isArray(record) ? record : { _raw: l }; } catch { return { _raw: l }; }
       });
-      return json(200, { records });
+      return json(200, { records: orderRecords(records), truncated: lines.length > recordLimit, recordLimit });
     }
 
     if (api === "knob" && req.method === "POST") {
@@ -211,7 +236,9 @@ export default async (req) => {
     }
 
     return json(400, { error: "unknown api" });
-  } catch {
+  } catch (error) {
+    if (error instanceof InputError) return json(400, { error: error.message });
+    if (error instanceof PayloadTooLarge) return json(413, { error: "payload too large" });
     // Upstream errors may contain URLs with fleet keys or other credentials.
     console.error("dashboard request failed");
     return json(500, { error: "internal" });
@@ -259,6 +286,7 @@ const HTML = `<!doctype html>
   .gate form{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:24px;width:320px;text-align:center}
   .gate h1{font-size:16px}.gate input{width:100%;margin:10px 0}
   .empty{color:var(--dim);padding:30px;text-align:center}.err{color:var(--red)}
+  ${REPORT_STYLE}
 </style></head><body>
 
 <div class="gate" id="gate"><form id="loginForm">
@@ -269,24 +297,28 @@ const HTML = `<!doctype html>
 
 <header style="display:none" id="hdr">
   <h1>ringkit fleet <span id="counts"></span></h1>
-  <div class="tabs"><button class="on" data-act="tab" data-tab="devices">Devices</button>
+  <div class="tabs"><button class="on" data-act="tab" data-tab="analytics">Overview</button>
+    <button data-act="tab" data-tab="devices">Devices</button>
     <button data-act="tab" data-tab="issues">Issues</button>
+    <button data-act="tab" data-tab="timeline">Timeline</button>
+    <button data-act="tab" data-tab="silent">Missing check-ins</button>
     <button data-act="tab" data-tab="keys">Keys</button></div>
-  <select id="appFilter"></select>
-  <input id="search" placeholder="search label...">
+  <select id="appFilter" aria-label="App filter"></select>
+  <input id="search" aria-label="Search device label" placeholder="search label...">
   <div class="grow"></div>
   <button data-act="refresh">Refresh</button>
   <button class="dim" data-act="logout">Sign out</button>
+  ${REPORT_CONTROLS}
 </header>
 <main id="main" style="display:none"><div class="empty">Loading...</div></main>
 <div class="drawer" id="drawer"><button class="close" data-act="close">&times;</button><div id="drawerBody"></div></div>
 
 <script>
-var KEY=null,TAB='devices';
+var KEY=null,TAB='analytics';
 function el(id){return document.getElementById(id)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
 function api(name,opts){opts=opts||{};opts.headers=Object.assign({'x-dashboard-key':KEY},opts.headers||{});
-  return fetch('?api='+name+(opts.qs||''),opts).then(function(r){if(r.status===401){logout();throw new Error('unauthorized')}return r.json()})}
+  return fetch('?api='+name+(opts.qs||''),opts).then(function(r){if(r.status===401){logout();throw new Error('unauthorized')}return r.json().then(function(d){if(!r.ok)throw new Error(d.error||'Request failed');return d})})}
 function ago(ts){if(!ts)return '-';var s=(Date.now()-new Date(ts).getTime())/1000;if(s<60)return Math.round(s)+'s';if(s<3600)return Math.round(s/60)+'m';if(s<86400)return Math.round(s/3600)+'h';return Math.round(s/86400)+'d'}
 function kb(b){return Math.round((b||0)/1024*10)/10+' KB'}
 
@@ -295,32 +327,31 @@ el('loginForm').addEventListener('submit',function(e){e.preventDefault();KEY=el(
    .catch(function(){el('loginErr').textContent='Wrong password';KEY=null})});
 function logout(){sessionStorage.removeItem('dk');location.reload()}
 function boot(d){el('gate').style.display='none';el('hdr').style.display='flex';el('main').style.display='block';
-  el('counts').textContent='- '+d.devices+' devices - '+d.openIssues+' open issues';
+  el('counts').textContent='- fleet: '+d.devices+' devices - '+d.openIssues+' open issues'+(d.appsTruncated?' · app selector is partial':'');
   el('appFilter').innerHTML='<option value="">all apps</option>'+d.apps.map(function(a){return '<option>'+esc(a)+'</option>'}).join('');
-  reload()}
+  reportControls();reload()}
 function qstr(){var a=el('appFilter').value,q=el('search').value,s=[];
   if(a)s.push('app='+encodeURIComponent(a));if(q)s.push('q='+encodeURIComponent(q));return s.length?'&'+s.join('&'):''}
-function reload(){var m=el('main');m.innerHTML='<div class="empty">Loading...</div>';
-  if(TAB==='devices')api('devices',{qs:qstr()}).then(renderDevices).catch(function(e){m.innerHTML='<div class="empty err">'+esc(e.message)+'</div>'});
-  else if(TAB==='keys')api('keys').then(renderKeys).catch(function(e){m.innerHTML='<div class="empty err">'+esc(e.message)+'</div>'});
-  else api('issues',{qs:qstr()}).then(renderIssues)}
+function reload(){var m=el('main'),load=++LOAD_ID;m.innerHTML='<div class="empty">Loading...</div>';
+  var renderers={analytics:renderAnalytics,devices:renderDevices,keys:renderKeys,issues:renderIssues,silent:renderSilent,timeline:renderTimeline},renderer=renderers[TAB];
+  return api(TAB,{qs:reportQuery()}).then(function(d){if(load===LOAD_ID)renderer(d)}).catch(function(e){if(load===LOAD_ID)m.innerHTML='<div class="empty err" role="alert">'+esc(e.message)+'</div>'})}
 
-function renderDevices(d){var r=d.devices;if(!r.length){el('main').innerHTML='<div class="empty">No devices</div>';return}
-  var t='<table><thead><tr><th>App</th><th>Label</th><th>Device</th><th>SDK</th><th>App ver</th><th>Last seen</th><th>Level</th><th>Flags</th><th>Today</th></tr></thead><tbody>';
+function renderDevices(d){var r=d.devices;if(!r.length){el('main').innerHTML='<div class="empty">No devices</div>'+pager(d,0);return}
+  var t='<div class="table-scroll"><table><thead><tr><th>App</th><th>Label</th><th>Device</th><th>SDK</th><th>App ver</th><th>Last seen</th><th>Level</th><th>Flags</th><th>Today</th></tr></thead><tbody>';
   r.forEach(function(x){t+='<tr data-act="device" data-install="'+esc(x.install_id)+'">'+
     '<td>'+esc(x.app_id)+'</td><td>'+esc(x.device_label)+'</td><td class="dim">'+esc(x.manufacturer)+' '+esc(x.model)+'</td>'+
     '<td>'+esc(x.sdk_int)+'</td><td>'+esc(x.app_version)+'</td><td>'+ago(x.last_seen)+' ago</td>'+
     '<td><span class="pill '+(x.log_level==='verbose'?'verbose':'')+'">'+esc(x.log_level)+'</span></td>'+
     '<td>'+(x.pull_requested?'<span class="pill pull">pull</span> ':'')+(x.killed?'<span class="pill killed">killed</span>':'')+'</td>'+
     '<td class="dim">'+kb(x.bytes_today)+'</td></tr>'});
-  el('main').innerHTML=t+'</tbody></table>'}
+  el('main').innerHTML=t+'</tbody></table></div>'+pager(d,r.length)}
 
 function renderIssues(d){var r=d.issues;if(!r.length){el('main').innerHTML='<div class="empty">No issues</div>';return}
-  var t='<table><thead><tr><th>Type</th><th>Codepoint</th><th>Degradations</th><th>Devices</th><th>Occurrences</th><th>Status</th><th>Last seen</th></tr></thead><tbody>';
+  var t=partial(d)+'<p class="notice">'+(d.scope==='app'?'Affected devices belong to the selected app. Occurrences are unavailable per app; first/last issue dates describe the whole fleet.':'Occurrence totals are heartbeat-delta driven and retries may repeat a delta. They are not exactly-once totals.')+'</p><div class="table-scroll"><table><thead><tr><th>Type</th><th>Codepoint</th><th>Degradations</th><th>Devices</th><th>Occurrences</th><th>Status</th><th>Last seen (fleet)</th></tr></thead><tbody>';
   r.forEach(function(x){t+='<tr><td>'+esc(x.incident_type)+'</td><td class="mono">'+esc(x.codepoint)+'</td>'+
     '<td class="dim">'+esc((x.degradations||[]).join(', '))+'</td><td>'+esc(x.device_count)+'</td>'+
-    '<td>'+esc(x.occurrence_count)+'</td><td>'+esc(x.status)+'</td><td>'+ago(x.last_seen)+' ago</td></tr>'});
-  el('main').innerHTML=t+'</tbody></table>'}
+    '<td>'+num(x.occurrence_count)+'</td><td>'+esc(x.status)+'</td><td>'+ago(x.last_seen)+' ago</td></tr>'});
+  el('main').innerHTML=t+'</tbody></table></div>'}
 
 function renderKeys(d){var r=d.keys||[];
   var t='<div class="row"><b>New key</b> <input id="nkApp" placeholder="app name (e.g. mallu-talks)"><input id="nkLabel" placeholder="note (optional)"><button data-act="keyCreate">+ Create key</button></div>'+
@@ -335,8 +366,8 @@ function renderKeys(d){var r=d.keys||[];
     '<button data-act="keyDelete" data-key="'+esc(x.api_key)+'" data-app="'+esc(x.app_id)+'">delete</button></td></tr>'});
   el('main').innerHTML=t+'</tbody></table>'}
 
-function openDevice(id){var b=el('drawerBody');b.innerHTML='<div class="empty">Loading...</div>';el('drawer').classList.add('open');
-  api('device',{qs:'&install='+encodeURIComponent(id)}).then(function(d){var v=d.device;
+function openDevice(id){var b=el('drawerBody'),load=++DRAWER_ID;DRAWER_OPEN=true;b.innerHTML='<div class="empty">Loading...</div>';el('drawer').classList.add('open');
+  api('device',{qs:'&install='+encodeURIComponent(id)}).then(function(d){if(load!==DRAWER_ID)return;var v=d.device;
     var s='<h2>'+esc(v.device_label)+'</h2><div class="kv">'+
       '<div>app_id</div><div>'+esc(v.app_id)+'</div><div>package</div><div class="mono">'+esc(v.package_name||'-')+'</div>'+
       '<div>install_id</div><div class="mono">'+esc(v.install_id)+'</div>'+
@@ -349,7 +380,8 @@ function openDevice(id){var b=el('drawerBody');b.innerHTML='<div class="empty">L
       '<button data-act="pull" data-install="'+esc(v.install_id)+'">'+(v.pull_requested?'pull requested':'Request full buffer')+'</button>'+
       (v.killed?'<span class="pill killed">telemetry killed</span>':'')+'</div>';
     s+='<h2>Incidents <span class="dim">('+d.incidents.length+')</span></h2>';
-    if(!d.incidents.length)s+='<div class="dim">none - healthy</div>';
+    s+='<button data-act="deviceTimeline" data-install="'+esc(v.install_id)+'">View captured timeline</button>';
+    if(!d.incidents.length)s+='<div class="dim">No retained incident uploads</div>';
     else{s+='<table><thead><tr><th>When</th><th>Type</th><th>Codepoint</th><th>Call</th><th></th></tr></thead><tbody>';
       d.incidents.forEach(function(i){var it=i.issue||{};
         s+='<tr><td>'+ago(i.server_ts)+' ago</td><td>'+esc(i.kind==='pull'?'pull':(it.incident_type||i.kind))+'</td>'+
@@ -357,31 +389,35 @@ function openDevice(id){var b=el('drawerBody');b.innerHTML='<div class="empty">L
         '<td><button data-act="payload" data-path="'+esc(encodeURIComponent(i.payload_path))+'">log</button></td></tr>'});
       s+='</tbody></table>'}
     if(d.heartbeats.length)s+='<h2>Latest heartbeat <span class="dim">'+esc(d.heartbeats[0].day)+'</span></h2><pre>'+esc(JSON.stringify(d.heartbeats[0].counters,null,1))+'</pre>';
-    b.innerHTML=s})}
+    b.innerHTML=s}).catch(function(e){if(load===DRAWER_ID)b.innerHTML='<div class="empty err">'+esc(e.message)+'</div>'})}
 
-function viewPayload(p){var b=el('drawerBody'),back=b.innerHTML;b.innerHTML='<button data-act="back">&larr; back</button><div class="empty">Decompressing...</div>';
+function viewPayload(p){var b=el('drawerBody'),back=DRAWER_OPEN?{html:b.innerHTML,records:LOG_RECORDS}:null,load=++DRAWER_ID;DRAWER_OPEN=true;b.innerHTML='<button data-act="back">&larr; back</button><div class="empty">Decompressing...</div>';
+  el('drawer').classList.add('open');
   window.__back=back;
   api('payload',{qs:'&path='+p}).then(function(d){
-    var o='<button data-act="back">&larr; back</button><h2>Black-box log <span class="dim">('+d.records.length+' records)</span></h2>';
-    d.records.forEach(function(r){o+='<div class="rec"><span class="lvl '+esc(r.level)+'">'+esc(r.level||'')+'</span> '+
-      '<span class="dim mono">'+esc(r.tag||'')+'</span> '+esc(r.event||r._raw||'')+
-      (r.data?' <span class="dim mono">'+esc(JSON.stringify(r.data))+'</span>':'')+(r.stack?'<pre>'+esc(r.stack)+'</pre>':'')+'</div>'});
-    b.innerHTML=o})}
+    if(load!==DRAWER_ID)return;LOG_RECORDS=d.records;LOG_VISIBLE=500;b.innerHTML='<button data-act="back">&larr; back</button><h2>Captured log timeline</h2><p class="notice">Ordered by boot and elapsed time when available. Displayed wall time is the device clock. Each upload contains a bounded slice of available logs.</p>'+(d.truncated?'<p class="warning">This upload exceeds the record limit. Only its latest '+d.recordLimit+' records are available here.</p>':'')+'<label>Call ID <input id="logCallFilter" placeholder="Filter exact call ID"></label><p class="dim" id="logCount"></p><div id="logRecords"></div><button id="moreLogs" data-act="moreLogs" hidden>Show 500 more records</button>';renderLogRecords()
+  }).catch(function(e){if(load===DRAWER_ID)b.innerHTML='<button data-act="back">&larr; back</button><div class="empty err">'+esc(e.message)+'</div>'})}
+
+${REPORT_CLIENT}
 
 function toast(m){var t=document.createElement('div');t.textContent=m;
   t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#2f81f7;color:#fff;padding:8px 16px;border-radius:6px;z-index:60';
   document.body.appendChild(t);setTimeout(function(){t.remove()},1800)}
 
 document.addEventListener('click',function(e){var t=e.target.closest('[data-act]');if(!t)return;var act=t.getAttribute('data-act');
-  if(act==='tab'){TAB=t.getAttribute('data-tab');document.querySelectorAll('.tabs button').forEach(function(b){b.className=b===t?'on':''});reload()}
+  if(act==='tab'){closeDrawer();TAB=t.getAttribute('data-tab');resetPage();reportControls();document.querySelectorAll('.tabs button').forEach(function(b){b.className=b===t?'on':''});reload()}
+  else if(act==='nextPage'){PREV_OFFSETS.push(PAGE_OFFSET);PAGE_OFFSET=Number(t.getAttribute('data-offset'));reload()}
+  else if(act==='previousPage'){PAGE_OFFSET=PREV_OFFSETS.pop()||0;reload()}
+  else if(act==='deviceTimeline'){el('installFilter').value=t.getAttribute('data-install');el('callFilter').value='';closeDrawer();document.querySelector('[data-tab="timeline"]').click()}
   else if(act==='refresh')reload();
   else if(act==='logout')logout();
   else if(act==='device')openDevice(t.getAttribute('data-install'));
-  else if(act==='close')el('drawer').classList.remove('open');
+  else if(act==='close')closeDrawer();
   else if(act==='payload'){e.stopPropagation();viewPayload(t.getAttribute('data-path'))}
-  else if(act==='back')el('drawerBody').innerHTML=window.__back;
-  else if(act==='pull'){var id=t.getAttribute('data-install');
-    api('knob',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({install:id,pull_requested:true})}).then(function(){toast('full-buffer pull requested');openDevice(id)})}
+  else if(act==='back'){DRAWER_ID++;if(window.__back){el('drawerBody').innerHTML=window.__back.html;LOG_RECORDS=window.__back.records;window.__back=null}else closeDrawer()}
+  else if(act==='moreLogs'){LOG_VISIBLE+=500;renderLogRecords()}
+  else if(act==='pull'){var id=t.getAttribute('data-install'),drawer= DRAWER_ID;
+    api('knob',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({install:id,pull_requested:true})}).then(function(){toast('full-buffer pull requested');if(drawer===DRAWER_ID)openDevice(id)})}
   else if(act==='keyCopy'){navigator.clipboard.writeText(t.getAttribute('data-key')).then(function(){toast('key copied')})}
   else if(act==='keyCreate'){var na=el('nkApp').value.trim();if(!na){toast('enter an app name');return}
     api('keyCreate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({app_id:na,label:el('nkLabel').value.trim()})}).then(function(){toast('key created');reload()})}
@@ -392,8 +428,8 @@ document.addEventListener('click',function(e){var t=e.target.closest('[data-act]
     api('keyDelete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:t.getAttribute('data-key')})}).then(function(){toast('deleted');reload()})}});
 document.addEventListener('change',function(e){var t=e.target.closest('[data-act="level"]');if(!t)return;
   api('knob',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({install:t.getAttribute('data-install'),log_level:t.value})}).then(function(){toast('level -> '+t.value)})});
-var si;el('search').addEventListener('input',function(){clearTimeout(si);si=setTimeout(reload,250)});
-el('appFilter').addEventListener('change',reload);
+var si;el('search').addEventListener('input',function(){clearTimeout(si);si=setTimeout(function(){resetPage();reload()},250)});
+el('appFilter').addEventListener('change',function(){resetPage();reload()});
 
 var saved=sessionStorage.getItem('dk');
 if(saved){KEY=saved;api('summary').then(boot).catch(function(){sessionStorage.removeItem('dk')})}
