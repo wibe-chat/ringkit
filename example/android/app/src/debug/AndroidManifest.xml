@@ -5,7 +5,7 @@
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
 
-    <application>
+    <application android:networkSecurityConfig="@xml/local_test_network_security">
         <!-- DEBUG-ONLY adb trigger (CLAUDE.md cookbook): exported so
              `adb shell am broadcast` reaches it; routes through the Mode-2
              parser path (RingKitNative). Never ships in release. -->

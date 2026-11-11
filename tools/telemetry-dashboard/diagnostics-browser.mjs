@@ -1,0 +1,84 @@
+// Standalone browser verification. Use an installed Playwright module and Chrome;
+// all API data and credentials are synthetic, with no network to a real backend.
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { mkdir } from 'node:fs/promises';
+import dashboard from './netlify/functions/dashboard.mjs';
+const require = createRequire(import.meta.url);
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const artifact = process.env.BROWSER_EVIDENCE_DIR || '/tmp/ringkit-dashboard-browser';
+await mkdir(artifact, { recursive: true });
+const html = await (await dashboard(new Request('https://dashboard.test/'))).text();
+const install = '00000000-0000-4000-8000-000000000001';
+const request = '10000000-0000-4000-8000-000000000001';
+const report = '20000000-0000-4000-8000-000000000001';
+const device = { install_id: install, app_id:'Test app', device_label:'Synthetic Redmi', manufacturer:'Xiaomi', model:'Test model', sdk_int:31, app_version:'test', plugin_version:'0.2.1', telemetry_protocol:2, capabilities:['diagnostic_session','correlated_pull'], sdk_build_id:'build-B', host_version_code:11, host_debuggable:false, diagnostics_enabled:false };
+let requests = [], parts = [];
+const actions = [], errors = [];
+const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' });
+try {
+ const page = await browser.newPage({viewport:{width:1440,height:1100}});
+ page.on('pageerror', error => errors.push(error.message));
+ await page.route('**/*', async route => {
+  const req = route.request(), url = new URL(req.url());
+  if (url.hostname !== 'dashboard.test') return route.abort();
+  const api = url.searchParams.get('api');
+  if (!api) return route.fulfill({contentType:'text/html',body:html});
+  if (req.headers()['x-dashboard-key'] !== 'synthetic-browser-password') return route.fulfill({status:401,json:{error:'unauthorized'}});
+  let body;
+  if(api==='summary') body={devices:1,openIssues:0,apps:['Test app']};
+  else if(api==='analytics') body={error:'Synthetic fixture: use Devices'};
+  else if(api==='devices') body={devices:[device],total:1,offset:0,limit:50};
+  else if(api==='device') body={device,incidents:[],heartbeats:[],requests,parts};
+  else if(api==='diagnostic') {
+   const b=req.postDataJSON(); actions.push(b);
+   if(b.action==='enroll') device.diagnostics_enabled=b.enabled;
+   if(b.action==='start') requests=[{id:request,kind:b.kind,state:'queued',requested_at:new Date().toISOString()}];
+   if(b.action==='stop') requests[0].state='cancelled';
+   if(b.action==='observe') requests[0].tester_observation={text:b.text,observed_at:b.observed_at};
+   body={ok:true};
+  } else if(api==='payload') body={records:[{callId:'call-one',boot:1,elapsed:10,wall:1000,event:'policy',data:{sound:true}},{callId:'call-one',boot:1,elapsed:20,wall:1010,event:'Playing',data:{audible:true}},{callId:'call-two',boot:1,elapsed:22,wall:1012,event:'stop'}]};
+  else return route.fulfill({status:400,json:{error:'unexpected fixture request'}});
+  return route.fulfill({json:body});
+ });
+ await page.goto('https://dashboard.test/');
+ await page.locator('#pw').fill('synthetic-browser-password');
+ await page.getByRole('button',{name:'Sign in',exact:true}).click();
+ await page.locator('#gate').waitFor({state:'hidden'});
+ await page.evaluate(() => { TAB='devices'; reload(); });
+ await page.locator('[data-act="device"]').click();
+ await page.getByRole('button',{name:'Enable diagnostics canary',exact:true}).click();
+ await page.getByRole('button',{name:'Disable diagnostics',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Start 30-minute session'}).click();
+ await page.getByText('pending device contact',{exact:true}).waitFor();
+ for(const state of ['offered','acknowledged','collecting','received_empty','failed','expired']) {
+  requests[0].state=state;
+  await page.evaluate(id=>openDevice(id),install);
+  await page.getByRole('heading',{name:'diagnostic_session — '+state,exact:true}).waitFor();
+ }
+ requests[0].state='received'; requests[0].call_count=2; requests[0].record_count=3; requests[0].acknowledged_at=new Date().toISOString(); requests[0].received_at=new Date().toISOString(); requests[0].received_bytes=1024;
+ parts=[{request_id:request,report_id:report,part:1,parts_total:1,payload_path:'diagnostics/test.jsonl.gz',identity:{sdk_build_id:'build-A'},metadata:{record_count:3,final:true,observed_call_count:2,clock_offset_ms:1000}}];
+ await page.evaluate(id=>openDevice(id),install);
+ await page.getByText('Captured build: build-A',{exact:false}).waitFor();
+ await page.locator('#observation-'+request).fill('Tester heard vibration only <script>ignored</script>');
+ await page.locator('#observed-at-'+request).fill('2026-11-11T16:27:00+05:30');
+ await page.getByRole('button',{name:'Save observation'}).click();
+ await page.locator('#observation-'+request).waitFor();
+ await page.locator('.toast').waitFor({state:'hidden'}).catch(()=>{});
+ await page.screenshot({path:artifact+'/request-receipt.png',fullPage:true});
+ await page.getByRole('button',{name:'Call evidence'}).click();
+ await page.getByText('engine-start flag only',{exact:true}).waitFor();
+ assert.ok((await page.locator('#drawerBody').textContent()).includes('Physical audibility is unknown'));
+ await page.screenshot({path:artifact+'/call-evidence.png',fullPage:true});
+ await page.getByRole('button',{name:'← back'}).click();
+ await page.getByRole('button',{name:'Start 30-minute session'}).click();
+ await page.getByRole('button',{name:'Stop diagnostics',exact:true}).click();
+ await page.getByRole('heading',{name:'diagnostic_session — cancelled',exact:true}).waitFor();
+ device.telemetry_protocol=1; device.capabilities=[];
+ await page.evaluate(id=>openDevice(id),install);
+ await page.getByText('Unsupported:',{exact:false}).waitFor();
+ assert.ok(await page.getByRole('button',{name:'Start 30-minute session'}).isDisabled());
+ assert.deepEqual(errors,[]);
+ assert.ok(actions.some(x=>x.action==='observe') && actions.some(x=>x.action==='stop'));
+ console.log('PASS browser: login, enrollment, request states, receipt identity, observation, call narrative, cancellation, unsupported client; screenshots '+artifact);
+} finally { await browser.close(); }

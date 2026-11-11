@@ -42,11 +42,15 @@ internal class TelemetryEngine(
     private val state: TelemetryState,
     private val transport: CheckinTransport,
     private val scheduler: TelemetryScheduler,
+    private val identity: () -> JSONObject = { NativeIdentity.sdk() },
+    private val diagnose: () -> JSONArray = { JSONArray() },
+    private val enabled: () -> Boolean = { true },
+    private val onCaptureChanged: (Boolean) -> Unit = {},
 ) {
 
     companion object {
         /** Raw JSONL bytes per pull part — gzips well under the 2 MB wire cap. */
-        const val PULL_PART_RAW_BYTES = 3 * 1024 * 1024
+        const val PULL_PART_RAW_BYTES = 1024 * 1024
 
         /** user_report ships the recent slice, tail-capped (pull covers the rest). */
         const val USER_REPORT_WINDOW_MS = 30L * 60L * 1000L
@@ -74,6 +78,23 @@ internal class TelemetryEngine(
     }
 
     private fun today(): String = dayUtc(time.wallMs())
+
+    fun runControl(): TelemetryRun {
+        if (!enabled() || state.killed) return TelemetryRun.DEFERRED
+        val descriptor = identity().toString()
+        if (state.deviceToken == null || state.metadataDue(today(), descriptor)) {
+            if (register() !is SendResult.Ok) return TelemetryRun.RETRY
+        }
+        return try {
+            DiagnosticEngine(installId, time, ringLog, state, transport, scheduler, checkinUrl(), ::deviceBlock,
+                { if (register() is SendResult.Ok) TelemetryRun.OK else TelemetryRun.RETRY }, ::applyKnobs, diagnose, enabled).run()
+        } finally {
+            if (enabled()) {
+                val active = state.diagnostics.active(time) && state.diagnosticsEnabled && !state.killed
+                onCaptureChanged(active)
+            } else onCaptureChanged(false)
+        }
+    }
 
     fun checkinUrl(): String {
         val e = config.endpoint.trimEnd('/')
@@ -121,6 +142,7 @@ internal class TelemetryEngine(
                     .put("degradations", meta.optJSONArray("degradations") ?: JSONArray())
                     .put("call_id", meta.optString("callId", "").takeIf { it.isNotBlank() } ?: JSONObject.NULL)
                     .put("device_ts_ms", wall)
+                    .put("identity", meta.optJSONObject("identity") ?: JSONObject().put("sdk_build_id", "unknown"))
                     .put("records_gzip_b64", gzipB64(redactedFileBytes(file))),
             )
             when (send("incident", payload, gated = true)) {
@@ -153,6 +175,7 @@ internal class TelemetryEngine(
                         .put("type", o.optString("event").substringAfter("incident:", "UNKNOWN"))
                         .put("cp", o.optString("cp"))
                         .put("callId", o.optString("callId"))
+                        .put("identity", o.optJSONObject("identity"))
                     val degradationsCsv = o.optJSONObject("data")?.optString("degradations") ?: ""
                     val arr = JSONArray()
                     degradationsCsv.split(',').filter { it.isNotBlank() }.forEach { arr.put(wireName(it)) }
@@ -204,6 +227,9 @@ internal class TelemetryEngine(
                 SendResult.Drop -> return TelemetryRun.OK // malformed beat: don't loop
             }
         }
+        if (state.pendingUserReport != null) scheduler.scheduleUserReport()
+        if (state.pullPending) scheduler.schedulePull()
+        if (state.serverProtocol >= 2 && state.diagnosticsEnabled) scheduler.scheduleControl()
         return TelemetryRun.OK
     }
 
@@ -211,27 +237,26 @@ internal class TelemetryEngine(
 
     fun runPull(): TelemetryRun {
         if (!state.pullPending) return TelemetryRun.OK
-        ringLog.awaitDrained(5_000L)
-        val lines = ArrayList<String>()
-        ringLog.bufferFilesOldestFirst().forEach { f ->
-            runCatching { f.forEachLine { line -> redactLine(line)?.let { lines.add(it) } } }
-        }
-        val parts = packParts(lines, PULL_PART_RAW_BYTES).ifEmpty { listOf("") }
-        parts.forEachIndexed { index, raw ->
-            val payload = baseRequest("pull").put(
-                "pull",
-                JSONObject()
+        var pending = state.pendingPull
+        if (pending == null) {
+            val lines = (ringLog.bufferSnapshot() ?: return TelemetryRun.RETRY).mapNotNull(::redactLine)
+            val parts = packParts(lines, PULL_PART_RAW_BYTES).ifEmpty { listOf("") }
+            pending = JSONArray(parts.mapIndexed { index, raw ->
+                baseRequest("pull").put("pull", JSONObject()
                     .put("records_gzip_b64", gzipB64(raw.toByteArray(Charsets.UTF_8)))
-                    .put("part", index + 1)
-                    .put("of", parts.size),
-            )
-            when (send("pull", payload, gated = false)) {
-                is SendResult.Ok -> Unit
+                    .put("part", index + 1).put("of", parts.size))
+            })
+            state.pendingPull = pending
+        }
+        for (i in 0 until pending.length()) {
+            when (send("pull", pending.getJSONObject(i), gated = false)) {
+                is SendResult.Ok -> state.pendingPull = if (i + 1 == pending.length()) null else JSONArray((i + 1 until pending.length()).map { pending.getJSONObject(it) })
                 SendResult.Deferred -> return TelemetryRun.DEFERRED
                 SendResult.Retry -> return TelemetryRun.RETRY
-                SendResult.Drop -> return TelemetryRun.OK
+                SendResult.Drop -> { state.pendingPull = null; state.clearPullPending(); return TelemetryRun.OK }
             }
         }
+        state.pendingPull = null
         // The final part's response knobs normally clear the flag; belt+braces
         // for a response that omitted them.
         state.clearPullPending()
@@ -241,40 +266,30 @@ internal class TelemetryEngine(
     // ── "Report issue now" (push-side pull: recent slice + marker) ───────
 
     fun runUserReport(): TelemetryRun {
-        ringLog.awaitDrained(5_000L)
-        val now = time.wallMs()
-        val since = now - USER_REPORT_WINDOW_MS
-        val lines = ArrayList<String>()
-        ringLog.bufferFilesOldestFirst().takeLast(2).forEach { f ->
-            runCatching {
-                f.forEachLine { line ->
-                    if (line.isBlank()) return@forEachLine
-                    val wall = runCatching { JSONObject(line).optLong("wall", Long.MAX_VALUE) }.getOrNull()
-                    if (wall != null && wall >= since) redactLine(line)?.let { lines.add(it) }
-                }
-            }
+        val payload = state.pendingUserReport ?: run {
+            val now = time.wallMs()
+            val since = now - USER_REPORT_WINDOW_MS
+            val candidates = (ringLog.bufferSnapshot() ?: return TelemetryRun.RETRY).filter {
+                runCatching { JSONObject(it).optLong("wall", Long.MIN_VALUE) >= since }.getOrDefault(false)
+            }.mapNotNull(::redactLine)
+            // Single backwards pass tail-caps UTF-8 bytes without repeatedly joining the whole buffer.
+            var used = 0
+            val lines = candidates.asReversed().takeWhile { line ->
+                used += line.toByteArray(Charsets.UTF_8).size + 1
+                used <= USER_REPORT_MAX_RAW_BYTES
+            }.asReversed()
+            baseRequest("user_report").put("incident", JSONObject()
+                .put("fingerprint", USER_REPORT_FINGERPRINT).put("incident_type", "USER_REPORT")
+                .put("codepoint", "Telemetry.userReport").put("degradations", JSONArray())
+                .put("call_id", JSONObject.NULL).put("device_ts_ms", now).put("identity", identity())
+                .put("records_gzip_b64", gzipB64(lines.joinToString("\n").toByteArray(Charsets.UTF_8))))
         }
-        var raw = lines.joinToString("\n")
-        while (raw.length > USER_REPORT_MAX_RAW_BYTES && lines.isNotEmpty()) {
-            lines.removeAt(0) // tail-cap: keep the newest records
-            raw = lines.joinToString("\n")
-        }
-        val payload = baseRequest("user_report").put(
-            "incident",
-            JSONObject()
-                .put("fingerprint", USER_REPORT_FINGERPRINT)
-                .put("incident_type", "USER_REPORT")
-                .put("codepoint", "Telemetry.userReport")
-                .put("degradations", JSONArray())
-                .put("call_id", JSONObject.NULL)
-                .put("device_ts_ms", now)
-                .put("records_gzip_b64", gzipB64(raw.toByteArray(Charsets.UTF_8))),
-        )
+        state.pendingUserReport = payload
         return when (send("user_report", payload, gated = true)) {
-            is SendResult.Ok -> TelemetryRun.OK
+            is SendResult.Ok -> { state.pendingUserReport = null; TelemetryRun.OK }
             SendResult.Deferred -> TelemetryRun.DEFERRED
             SendResult.Retry -> TelemetryRun.RETRY
-            SendResult.Drop -> TelemetryRun.OK
+            SendResult.Drop -> { state.pendingUserReport = null; TelemetryRun.OK }
         }
     }
 
@@ -328,15 +343,19 @@ internal class TelemetryEngine(
             // the AUTHORITATIVE app identity is the fleet key the app registered
             // with (a client can't spoof its app by lying here).
             .put("package_name", packageName)
+            .apply { val id = identity(); id.keys().forEach { put(it, id.get(it)) } }
 
     private fun register(): SendResult {
+        if (!enabled()) return SendResult.Deferred
         val payload = baseRequest("register").put("device", deviceBlock())
         return when (val r = transport.post(checkinUrl(), config.apiKey, gzip(payload.toString().toByteArray(Charsets.UTF_8)))) {
             is CheckinResult.Failure -> SendResult.Retry
             is CheckinResult.Http ->
                 when {
+                    !enabled() -> SendResult.Deferred
                     r.code in 200..299 -> {
                         r.body?.let { applyKnobs(it) }
+                        state.metadataSent(today(), identity().toString())
                         SendResult.Ok(r.body)
                     }
                     // Bad apiKey: back off — a misconfigured app must not hot-loop.
@@ -351,27 +370,30 @@ internal class TelemetryEngine(
      * re-register once with the apiKey, retry once, then back off.
      */
     private fun send(kind: String, payload: JSONObject, gated: Boolean): SendResult {
-        if (state.killed) return SendResult.Deferred
+        if (!enabled() || state.killed) return SendResult.Deferred
         var token = state.deviceToken
         if (token == null) {
             val reg = register()
             if (reg !is SendResult.Ok) return SendResult.Retry
             token = state.deviceToken ?: return SendResult.Retry
         }
-        val body = gzip(payload.toString().toByteArray(Charsets.UTF_8))
+        val raw = payload.toString().toByteArray(Charsets.UTF_8)
+        val body = gzip(raw)
         if (gated) {
             val today = today()
             val budgetBytes = (state.knobBudgetKb ?: config.dailyUploadBudgetKb) * 1024
-            if (state.bytesToday(today) + body.size > budgetBytes) return SendResult.Deferred
+            if (state.bytesToday(today) + raw.size > budgetBytes) return SendResult.Deferred
         }
         var retriedAuth = false
         while (true) {
+            if (!enabled() || state.killed) return SendResult.Deferred
             when (val r = transport.post(checkinUrl(), token!!, body)) {
                 is CheckinResult.Failure -> return SendResult.Retry
                 is CheckinResult.Http ->
                     when {
+                        !enabled() -> return SendResult.Deferred
                         r.code in 200..299 -> {
-                            if (gated) state.addBytes(today(), body.size)
+                            if (gated) state.addBytes(today(), raw.size)
                             r.body?.let { applyKnobs(it) }
                             return SendResult.Ok(r.body)
                         }
@@ -403,6 +425,8 @@ internal class TelemetryEngine(
      * state write, then the side effects (sink level, kill/pull scheduling).
      */
     internal fun applyKnobs(body: JSONObject) {
+        if (!enabled()) return
+        state.negotiation(body.optInt("telemetry_protocol", 1), body.optBoolean("diagnostics_enabled", false))
         val wasKilled = state.killed
         val level = wireLevel(body.optString("log_level", ""))
         state.applyKnobs(
@@ -429,6 +453,7 @@ internal class TelemetryEngine(
             }
         }
         if (!nowKilled && state.pullPending) scheduler.schedulePull()
+        if (nowKilled || state.serverProtocol < 2 || !state.diagnosticsEnabled) state.diagnostics.stopAll("disabled")
     }
 
     // ── upload-time redaction (defense in depth — §11.4 applies to uploads) ──
@@ -463,12 +488,16 @@ internal class TelemetryEngine(
     private fun packParts(lines: List<String>, maxRawBytes: Int): List<String> {
         val parts = ArrayList<String>()
         val current = StringBuilder()
+        var currentBytes = 0
         lines.forEach { line ->
-            if (current.isNotEmpty() && current.length + line.length + 1 > maxRawBytes) {
+            val size = line.toByteArray(Charsets.UTF_8).size + 1
+            if (current.isNotEmpty() && currentBytes + size > maxRawBytes) {
                 parts.add(current.toString())
                 current.setLength(0)
+                currentBytes = 0
             }
             current.append(line).append('\n')
+            currentBytes += size
         }
         if (current.isNotEmpty()) parts.add(current.toString())
         return parts

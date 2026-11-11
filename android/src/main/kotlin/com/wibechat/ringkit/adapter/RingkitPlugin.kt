@@ -80,8 +80,9 @@ class RingkitPlugin : FlutterPlugin, ActivityAware {
     //    and provides the runtime-permission surface (§11.2) ──────────────
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
-        EngineRegistry.setActivityAttached(engineId, true)
+        EngineRegistry.setActivityAttached(engineId, true, binding.activity)
         permissionsImpl?.attachActivity(binding)
+        com.wibechat.ringkit.telemetry.Telemetry.seedForeground(binding.activity)
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
@@ -92,8 +93,9 @@ class RingkitPlugin : FlutterPlugin, ActivityAware {
     }
 
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
-        EngineRegistry.setActivityAttached(engineId, true)
+        EngineRegistry.setActivityAttached(engineId, true, binding.activity)
         permissionsImpl?.attachActivity(binding)
+        com.wibechat.ringkit.telemetry.Telemetry.seedForeground(binding.activity)
     }
 
     override fun onDetachedFromActivity() {

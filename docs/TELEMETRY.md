@@ -3,7 +3,7 @@
 Telemetry is **off unless the app configures it** (`RingKitConfig.telemetry`). When enabled, a
 device sends registration/recovery polls, a daily heartbeat, deduplicated incident reports,
 user-requested reports, and — only when an operator requests it — a full log-buffer pull.
-Logs otherwise stay on the device.
+An explicitly enrolled installation can also receive bounded diagnostic-session requests. Logs otherwise stay on the device.
 Uploads never use FCM or any high-priority channel and never run on the call-show path.
 
 ## Endpoint
@@ -19,7 +19,7 @@ Authorization: Bearer <device_token>      for every other kind
 Each app registers with its **own** fleet apiKey; the key determines the app the device belongs to
 (see "Multiple apps" below). One backend can serve many apps this way.
 
-## Request
+## Version 1 request
 
 ```jsonc
 { "v": 1, "kind": "register|heartbeat|incident|user_report|pull",
@@ -60,16 +60,21 @@ Incident responses add `"duplicate": true|false` (idempotent-retry detection).
 
 Incident uploads are idempotent per (install_id, fingerprint, device_ts): a retried upload is
 acknowledged (`duplicate: true`) without a second stored payload. Pulls are exempt from the
-budget (they are operator-initiated) and clear the `pull_buffer` flag when the last part lands.
+budget (they are operator-initiated) and clear the `pull_buffer` flag when the last part lands. This legacy flag does not prove all parts arrived; use v2 for correlated receipts.
 
 ## Client behavior (what the plugin's uploader actually does)
 
-- **Registration** happens lazily before the first upload of any kind; the token persists on
+- **Registration/metadata refresh** runs on native activation and foreground entry (coalesced over 30 seconds), or before an upload that lacks a token; the token persists on
   the device (never backed up, install-fenced — a cloned image re-registers cleanly).
 - **Incidents** ship once per fingerprint per device per UTC day, via an expedited WorkManager
   one-shot. Repeat occurrences stay local and reach the server as heartbeat fingerprint deltas.
   A snapshot that could not ship (offline, budget) is retried by the daily heartbeat's
   reconciliation sweep, subject to bounded local retention; prolonged outages can lose older data.
+  `RING_AUDIO_FAILED` reports an unrecoverable ringtone playback failure after the eligible
+  engine ladder is exhausted. It includes bounded source-kind, failure, focus and ring-volume
+  context, without the ringtone URI or raw playback exception message. Recovered fallbacks,
+  intentional/policy silence and stopped or superseded calls do not create this incident.
+  A player reporting that it started is not proof that sound was heard on the phone.
 - **Heartbeats** run in one daily periodic WorkManager slot. Missed days ship as separate
   catch-up day-buckets (up to 7 kept) oldest-first; the newest beat carries the fingerprint
   deltas and `dropped_logs`. Same-day re-beats replace that day's counters server-side.
@@ -77,14 +82,93 @@ budget (they are operator-initiated) and clear the `pull_buffer` flag when the l
   couple of backoff rounds, then the pull ships on metered anyway. `user_report` ("Report
   issue now") ships the past ~30 minutes under the fixed fingerprint `user-report`; flag a
   pull when you need the whole buffer.
-- **Knobs apply atomically on every response**: `log_level` switches the device's capture
+- **Knobs apply atomically on every response**: `log_level` switches the logcat/privacy
   level immediately (no reinstall), `budget_kb` overrides the configured budget, `kill: true`
   cancels all telemetry work and stops every data upload while local capture keeps running.
-  A killed device still sends one ~250 B `register` knob poll per day — that is the only way
+  A killed device still sends a small `register` knob poll per day — that is the only way
   `kill: false` can ever reach it.
 - **Privacy**: caller names/handles/avatar URLs are redacted in uploads unless the effective
   level is `verbose` (server override, else the configured upload level); the apiKey and
   device token never appear in any log or payload records at any level.
+
+## Version 2 diagnostics (SDK 0.2.1)
+
+Deploy the additive `remote_diagnostics` migration and updated ingest before the dashboard.
+New installations have `diagnostics_enabled=false`. Enroll selected test installations explicitly.
+The SDK sends v2 kinds only after the server returns `telemetry_protocol: 2` and
+`diagnostics_enabled: true`. A v2 SDK continues v1 uploads with an older backend; an older SDK
+has no session capability. None of these repository changes deploy themselves.
+
+The native device descriptor adds `sdk_build_id` (SHA-256 of packaged native sources/resources,
+Gradle configuration, consumer rules and package manifest), `telemetry_protocol`, `capabilities`,
+`host_version_code` and `host_debuggable`. It requires no Git checkout on the device. Capabilities
+are `audio_failure`, `build_identity`, `diagnostic_session` and `correlated_pull`. Unknown identity
+stays unknown. The debuggable flag does not establish Flutter build mode or a distinct real user.
+Incident snapshots and frozen reports retain their original capture identity after app updates.
+
+Enrolled apps check for commands on foreground entry, every five minutes while visible,
+and every minute during an acknowledged session. Lifecycle timers enqueue ordinary constrained
+work; they are not five-minute periodic WorkManager jobs. A session also schedules end-of-window
+work and uploads after call completion. Native capture works without Dart. An offline,
+force-stopped or restricted app can report late; a server request cannot guarantee waking it.
+
+```jsonc
+// Device-token authenticated; control has a separate 64 KiB/day allowance.
+{ "v": 2, "kind": "control", "install_id": "<uuid>",
+  "device": { /* native descriptor */ },
+  "request_id": "<optional uuid>", "action": "acknowledged|collecting|failed",
+  "diagnostic_status": [ /* up to 6 bounded upload attempt/status summaries */ ] }
+
+// Response also includes ordinary knobs.
+{ "status": "ok", "telemetry_protocol": 2, "diagnostics_enabled": true,
+  "requests": [{ "id": "<uuid>", "kind": "diagnostic_session|full_buffer",
+    "state": "offered", "duration_ms": 1800000, "max_calls": 20, "max_bytes": 524288 }],
+  "request_states": [{ "id": "<recent terminal uuid>", "state": "received" }],
+  "request_state": "acknowledged", "server_wall_ms": 0 }
+
+{ "v": 2, "kind": "diagnostic_report", "install_id": "<uuid>",
+  "report": { "request_id": "<uuid>", "report_id": "<uuid>", "part": 1, "of": 1,
+    "identity": { /* immutable capture identity */ }, "records_gzip_b64": "...",
+    "metadata": { "schema": 1, "final": true, "manifest": ["<report uuid>"],
+      "boot": 3, "from_elapsed": 0, "to_elapsed": 0,
+      "observed_call_count": 1, "truncated": false, "end_reason": "time_limit" } } }
+```
+
+A session admits at most **30 minutes, 20 calls or 512 KiB of decoded UTF-8 request bodies**.
+Reports are durably frozen before sending; retries use the same request/report/part identity
+and bytes. Deadlines use monotonic time and boot fencing. Cancellation, disablement, expiry or
+reboot ends capture. A package update ends old capture as `build_changed`; only already-frozen
+reports may ship with the old identity. Transient failures retain pending reports. Safe upload
+status, including retry limits, is reported on a later successful control sync and remains separate
+from a stored receipt. Activation/daily reconciliation resumes pending work. Session uploads
+remain redacted even when local verbosity is higher.
+
+An explicit retained-buffer request has a **5 MiB decoded-log / 8 MiB total-envelope** allowance.
+Parts target 1 MiB of raw UTF-8 logs, below the 3 MiB decoded-body ingestion cap after gzip/base64.
+Ordinary client budgets also count decoded request-body bytes. Explicit diagnostic allowances
+do not raise the ordinary daily incident budget.
+
+| State | What is known |
+| --- | --- |
+| queued | Waiting for contact; capture has not started. |
+| offered | Command delivered, persistence/acknowledgement unconfirmed. |
+| acknowledged | Device persisted the command; evidence can still be absent. |
+| collecting | Partial evidence; final manifest or parts are pending. |
+| received | Every manifest part was parsed and durably stored; inspect call coverage. |
+| received_empty | Expected parts arrived but contained zero log records. |
+| cancelled / expired / failed | Collection did not finish successfully; retained partial parts remain visible. |
+
+Receipts are install/token bound, idempotent and serialized with cancellation/replacement.
+They commit after Storage upload and parsing; counts are derived from records. An old completion
+cannot clear a newer UUID request. Recent terminal states reconcile lost final HTTP responses.
+Reassigning a device to another fleet app cancels its old active requests while retaining
+historical ownership. Operator observations are not sent back to the device.
+
+The dashboard separates registration, last control contact, payload receipt and captured build.
+It discloses bounded history, missing parts, capture range and truncation. Call narratives separate
+call IDs and boots and label legacy `audible=true` as an engine-start indication. Physical sound
+stays unknown until a tester supplies an observation; no microphone capture is added. Access
+remains for trusted all-app administrators, not a tenant-isolated developer portal.
 
 ## Server side (summary)
 
@@ -92,7 +176,7 @@ budget (they are operator-initiated) and clear the `pull_buffer` flag when the l
   (one row per app: `api_key → app_id`), `issues` (one row per unique failure fingerprint),
   `issue_devices`, `incidents` (payload index), `heartbeats`, `fleet_daily` (nightly roll-up for
   heat-maps, keyed by `app_id` + device attributes). Payloads live in the private `ringkit-logs`
-  storage bucket (`incidents/{install_id}/…`, `pulls/{install_id}/…`), gzipped JSONL.
+  storage bucket (`incidents/{install_id}/…`, `pulls/{install_id}/…`, `diagnostics/{install_id}/…`), gzipped JSONL.
 - Retention: 60 days for incidents/heartbeats/payload objects (nightly purge); heat-map
   roll-ups are kept.
 - All tables are deny-by-default (no anonymous access); only the edge functions (service role)
@@ -140,10 +224,11 @@ must never be used as a routine health check.
 Offline regression commands (from the repository root):
 
 ```bash
-deno test --config supabase/tests/deno.json --allow-env supabase/tests/security_test.ts
+deno test --config supabase/tests/deno.json --allow-env supabase/tests/security_test.ts supabase/tests/diagnostics_test.ts
 deno check supabase/functions/checkin/index.ts supabase/functions/purge/index.ts
 bash supabase/tests/registration.sh  # isolated PostgreSQL 16 container; requires Docker
-node --test tools/telemetry-dashboard/dashboard.test.mjs
+bash supabase/tests/diagnostics.sh # isolated PostgreSQL; also supports PG_BIN
+node --test tools/telemetry-dashboard/*.test.mjs
 ```
 
 These tests use only synthetic credentials and never contact a live backend.
@@ -174,34 +259,16 @@ device identity; protect the ingest service with appropriate abuse controls for 
 
 ## Cost model
 
-Per device per day: one ~1 KB heartbeat + incidents only on failure (deduped, ≤ once per
-fingerprint per day, `budget_kb` cap). Retention depends on a working purge schedule.
-Estimate requests, storage, compute and egress for your actual fleet and check
-[current Supabase pricing](https://supabase.com/pricing); no plan size or fixed cost is guaranteed.
+Estimate requests, decoded bodies, storage, compute and egress from the actual fleet. Ordinary
+traffic includes metadata refreshes, daily heartbeats and deduplicated incidents. Enrollment adds
+foreground control checks; sessions add faster checks and bounded uploads. Explicit pulls can
+upload several MiB. Measure at least 20 controlled command/report cycles before wider enrollment:
+record latency percentiles, failed/empty reports and bytes per tester. The incident budget is not a
+total backend-cost cap. Check [current Supabase pricing](https://supabase.com/pricing).
 
-**Why tiered, not naive log shipping.** A naive "ship every device's rotating buffer" design at
-50k devices, ~5 MB/device/day, is ~250 GB/day (~7.5 TB/month) of ingest and storage — orders of
-magnitude past a hobby-tier bill, and 99.9% of it is healthy-path noise no one reads. The tiered
-protocol inverts that: **logs stay on the device; only signals ship.**
-
-| | Naive (ship everything) | Tiered (this design) |
-|---|---|---|
-| Steady-state upload / device / day | ~5 MB | ~1 KB heartbeat (+ incidents only on failure) |
-| 50k-device fleet / month | ~7.5 TB | ~1.5 GB + deduped incidents |
-| One bug hitting 10k devices | 10k log streams | 1 `issues` row + counters, ≤ 10k small payloads (once/device/day), most days 0 |
-| Full detail for a specific device | always paid for | pulled on demand (operator flags the install) |
-
-The full buffer is never gone — it is one `pull_buffer` flag away for any device that needs a
-deep look. That is the whole trade: pay bytes for **signal** continuously, pay bytes for **detail**
-only when a human asks.
-
-**Upgrade path (if full-fleet log shipping is ever wanted).** The wire contract is backend-agnostic
-— two JSON shapes over HTTP. To move off Supabase without touching a single client:
-- **Cloudflare Workers + R2** — cheapest at scale; the Worker validates the token, writes gzipped
-  JSONL to R2, keeps the metadata tables in D1/Postgres. Same request/response shapes.
-- **Loki / ClickHouse** — if you want full-text log *search* across the fleet rather than
-  pull-on-demand; point the ingest function at the store and keep the dedup/heartbeat tables for
-  the dashboard. Higher cost, much richer query.
+The rotating local buffer can overwrite old records. A pending pull neither preserves them
+indefinitely nor proves collection. Open the app, wait for acknowledgement, test with unique call
+IDs and verify a nonempty matching receipt.
 
 ## Tester onboarding
 
@@ -214,13 +281,13 @@ For community testers running a telemetry-enabled build:
 - **Device label conventions.** Use something that identifies the hardware and the person at a
   glance in the dashboard: `ada-pixel8-a14`, `sam-miui-redmi12`, `qa-oneplus-lab3`. Manufacturer +
   model + OS quirk beats a bare name — the whole point is filtering "didn't ring on a Xiaomi" by
-  label. Keep it stable across reinstalls so one device stays one story.
+  label. A reinstall creates a new installation identity even if the label is reused.
 - **"Report issue now" etiquette.** Press it **right after** you reproduce a problem, while the
   relevant events are still in the on-device buffer (it ships roughly the last half hour). One press
-  per incident is enough — it flushes immediately; mashing it just re-sends overlapping slices and
+  per incident is enough — it queues a network-constrained upload; mashing it just re-sends overlapping slices and
   eats your daily budget. Note the rough time and what you did so the operator can line it up with
   the upload. If an operator asks for "the whole buffer," they will flag your device and it uploads
-  on the next check-in — you do not need to do anything.
+  on a subsequent eligible check-in. Open the app to prompt discovery and have the operator confirm receipt.
 - **Privacy.** At the default level, caller names and numbers are redacted before anything leaves
   the device. Only a per-device `verbose` opt-in (set by the operator, for consenting testers)
   includes them, and the tester build says so. Local capture always runs; disabling telemetry only

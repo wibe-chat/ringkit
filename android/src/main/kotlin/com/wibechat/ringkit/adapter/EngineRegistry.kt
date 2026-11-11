@@ -17,6 +17,7 @@ internal object EngineRegistry {
     internal class Engine(val id: Int, val headless: Boolean) {
         var sink: PigeonEventSink<CallEventRecord>? = null
         var activityAttached: Boolean = false
+        var activity: java.lang.ref.WeakReference<android.app.Activity>? = null
     }
 
     private val engines = LinkedHashMap<Int, Engine>() // insertion order = attach order
@@ -38,9 +39,13 @@ internal object EngineRegistry {
     }
 
     @Synchronized
-    fun setActivityAttached(id: Int, attached: Boolean) {
+    fun setActivityAttached(id: Int, attached: Boolean, activity: android.app.Activity? = null) {
         engines[id]?.activityAttached = attached
+        engines[id]?.activity = if (attached && activity != null) java.lang.ref.WeakReference(activity) else null
     }
+
+    @Synchronized
+    fun attachedActivity(): android.app.Activity? = designatedId()?.let { engines[it]?.activity?.get() }
 
     @Synchronized
     fun designatedId(): Int? {

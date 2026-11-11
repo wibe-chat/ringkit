@@ -77,6 +77,7 @@ class RingLog internal constructor(
         PARSE_REJECTED,
         FCM_DOWNGRADED,
         TELECOM_FALLBACK,
+        RING_AUDIO_FAILED,
     }
 
     /** Config logLevel (§11.4): gates the logcat tee + PII redaction, not capture. */
@@ -93,6 +94,10 @@ class RingLog internal constructor(
     @Volatile
     var onIncidentSnapshot: ((fingerprint: String) -> Unit)? = null
 
+    /** Optional immutable, non-secret descriptor supplied by the telemetry boundary. */
+    @Volatile
+    var diagnosticIdentityJson: String? = null
+
     private val incidentsDir = File(dir, "incidents")
     private val metaFile = File(dir, "meta.json")
     private val seq = AtomicLong(0)
@@ -106,6 +111,9 @@ class RingLog internal constructor(
         data class Incident(val fingerprint: String, val record: JSONObject) : Entry()
 
         data class Flush(val latch: CountDownLatch) : Entry()
+        class Snapshot(val latch: CountDownLatch = CountDownLatch(1)) : Entry() {
+            @Volatile var lines: List<String>? = null
+        }
     }
 
     private val writer =
@@ -182,6 +190,13 @@ class RingLog internal constructor(
     /** §11.5 pull-on-demand input: the full rotating buffer, oldest first. */
     fun bufferFilesOldestFirst(): List<File> = (rotatedFiles() + currentFile).filter { it.exists() }
 
+    /** Read a stable retained-buffer snapshot on the log writer, excluding rotation races. */
+    fun bufferSnapshot(timeoutMs: Long = 5_000L): List<String>? {
+        val request = Entry.Snapshot()
+        if (!queue.offer(request) || !request.latch.await(timeoutMs, TimeUnit.MILLISECONDS)) return null
+        return request.lines
+    }
+
     /** Stable §11.5 fingerprint: hash{incident type, codepoint, degradation set}. */
     fun fingerprint(type: IncidentType, codepoint: String, degradations: Set<String>): String {
         val basis = "${type.name}|$codepoint|${degradations.sorted().joinToString(",")}"
@@ -218,6 +233,9 @@ class RingLog internal constructor(
                 .put("cp", codepoint)
                 .put("event", event)
         if (callId != null) json.put("callId", callId)
+        diagnosticIdentityJson?.let { identity ->
+            if (tag == "incident") json.put("identity", JSONObject(identity))
+        }
         val redacted = redact(data)
         if (redacted.isNotEmpty()) {
             val obj = JSONObject()
@@ -270,7 +288,10 @@ class RingLog internal constructor(
                 // batch are lost and counted.
                 dropped.addAndGet(batch.count { it is Entry.Record })
             }
-            batch.forEach { if (it is Entry.Flush) it.latch.countDown() }
+            batch.forEach {
+                if (it is Entry.Flush) it.latch.countDown()
+                if (it is Entry.Snapshot) it.latch.countDown()
+            }
         }
     }
 
@@ -287,6 +308,9 @@ class RingLog internal constructor(
             persistMetaIfDirty()
         }
         batch.filterIsInstance<Entry.Incident>().forEach { snapshotIncident(it) }
+        batch.filterIsInstance<Entry.Snapshot>().forEach { request ->
+            request.lines = bufferFilesOldestFirst().flatMap { it.readLines(Charsets.UTF_8) }
+        }
     }
 
     private fun rotateIfNeeded() {

@@ -49,7 +49,9 @@ internal class FakeTransport : CheckinTransport {
 }
 
 internal class RecordingScheduler : TelemetryScheduler {
-    val calls = mutableListOf<String>()
+    val calls: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
+    override fun scheduleControl(delayMs: Long, afterCurrent: Boolean) { calls += if (afterCurrent) "control:successor" else "control" }
+    override fun scheduleSessionEnd(delayMs: Long) { calls += "sessionEnd" }
 
     override fun ensureHeartbeat() {
         calls += "heartbeat"
@@ -89,6 +91,7 @@ internal class EngineHarness(
     val transport = FakeTransport()
     val scheduler = RecordingScheduler()
     var appLevel: CoreLogLevel = CoreLogLevel.ERROR
+    var enabled = true
     val config =
         CoreTelemetryConfig(
             endpoint = "https://fleet.example",
@@ -110,6 +113,7 @@ internal class EngineHarness(
             state = state,
             transport = transport,
             scheduler = scheduler,
+            enabled = { enabled },
         )
 
     /** Write an incident through the real sink and wait for the file. */
@@ -149,6 +153,7 @@ internal class MockIngestServer {
     val statusQueue = ArrayDeque<Int>()
 
     var issuedToken = "server-tok-1"
+    @Volatile var responseTransform: (JSONObject, JSONObject) -> JSONObject = { _, response -> response }
 
     private val socket = java.net.ServerSocket(0, 50, java.net.InetAddress.getLoopbackAddress())
     private val thread = Thread({ acceptLoop() }, "mock-ingest").apply {
@@ -205,7 +210,7 @@ internal class MockIngestServer {
                 put("sampled", false)
                 put("budget_kb", 200)
                 put("kill", false)
-            }.toString().toByteArray(Charsets.UTF_8)
+            }.let { responseTransform(payload, it) }.toString().toByteArray(Charsets.UTF_8)
         val reason = if (status == 200) "OK" else "Error"
         val out = client.getOutputStream()
         out.write(

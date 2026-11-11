@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1 — unreleased
+
+- Automatically capture unrecoverable ringtone playback as a redacted, deduplicated incident;
+  preserve existing playback, focus and sound-policy behavior.
+- Generate native package identity, host version/debuggable metadata and diagnostic capabilities.
+  Preserve historical capture identity after updates.
+- Add opt-in bounded native diagnostic sessions, foreground command discovery, immutable retries,
+  cancellation, boot/build fencing and explicit upload status.
+- Add backwards-compatible server request/part receipts and dashboard controls, per-call evidence,
+  coverage limits and separate tester observations. New installations remain unenrolled.
+- Deploy additive backend/ingest support before the new dashboard. Target-device audio behavior
+  still requires physical verification; telemetry receipt does not establish audible ringing.
+
 ## 0.2.0 — 2026-10-15
 
 First pub.dev release. Includes the features from the earlier Git-only preview

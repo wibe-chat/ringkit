@@ -1,6 +1,6 @@
 name: ringkit
 description: "Android-only CallKit-style incoming-call UX: ring, full-screen, notification, and killed-state events. Signaling UX only — no RTC/media."
-version: 0.2.0
+version: 0.2.1
 homepage: https://github.com/wibe-chat/ringkit
 repository: https://github.com/wibe-chat/ringkit
 issue_tracker: https://github.com/wibe-chat/ringkit/issues

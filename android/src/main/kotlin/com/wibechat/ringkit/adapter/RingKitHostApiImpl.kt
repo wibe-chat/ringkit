@@ -55,6 +55,7 @@ internal class RingKitHostApiImpl(
             // §11.5: telemetry follows config transitions (enable ⇒ activate,
             // disable ⇒ cancel workers + detach seams, change ⇒ re-apply).
             runCatching { com.wibechat.ringkit.telemetry.Telemetry.onConfigChanged(core) }
+            com.wibechat.ringkit.telemetry.Telemetry.seedForeground(EngineRegistry.attachedActivity())
             Unit
         }
 

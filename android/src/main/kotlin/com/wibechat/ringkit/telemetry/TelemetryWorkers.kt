@@ -37,6 +37,10 @@ internal interface TelemetryScheduler {
     fun scheduleKillPoll(delayed: Boolean)
 
     fun cancelAllWork()
+
+    fun scheduleControl(delayMs: Long = 0, afterCurrent: Boolean = false)
+
+    fun scheduleSessionEnd(delayMs: Long)
 }
 
 /**
@@ -54,6 +58,8 @@ internal class WorkTelemetryScheduler(private val context: Context) : TelemetryS
         const val WORK_PULL = "ringkit.telemetry.pull"
         const val WORK_USER_REPORT = "ringkit.telemetry.userReport"
         const val WORK_KNOB_POLL = "ringkit.telemetry.knobPoll"
+        const val WORK_CONTROL = "ringkit.telemetry.control"
+        const val WORK_SESSION_END = "ringkit.telemetry.sessionEnd"
     }
 
     private val connected =
@@ -128,6 +134,20 @@ internal class WorkTelemetryScheduler(private val context: Context) : TelemetryS
     override fun cancelAllWork() {
         runCatching { wm().cancelAllWorkByTag(TAG) }
     }
+
+    override fun scheduleControl(delayMs: Long, afterCurrent: Boolean) {
+        val request = OneTimeWorkRequestBuilder<ControlWorker>().setConstraints(connected)
+            .setInitialDelay(delayMs.coerceAtLeast(0), TimeUnit.MILLISECONDS)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).addTag(TAG).build()
+        wm().enqueueUniqueWork(WORK_CONTROL, if (afterCurrent) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP, request)
+    }
+
+    override fun scheduleSessionEnd(delayMs: Long) {
+        val request = OneTimeWorkRequestBuilder<ControlWorker>().setConstraints(connected)
+            .setInitialDelay(delayMs.coerceAtLeast(0), TimeUnit.MILLISECONDS)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).addTag(TAG).build()
+        wm().enqueueUniqueWork(WORK_SESSION_END, ExistingWorkPolicy.REPLACE, request)
+    }
 }
 
 /**
@@ -157,11 +177,18 @@ internal abstract class TelemetryWorker(
             runCatching { WorkManager.getInstance(applicationContext).cancelAllWorkByTag(WorkTelemetryScheduler.TAG) }
             return Result.success()
         }
-        val outcome = runCatching { run(session.engine()) }.getOrElse { TelemetryRun.RETRY }
+        val outcome = runCatching { synchronized(session.state.operationLock) { run(session.engine { session.active && !isStopped }) } }.getOrElse { TelemetryRun.RETRY }
         return when (outcome) {
             TelemetryRun.OK, TelemetryRun.DEFERRED -> Result.success()
             TelemetryRun.RETRY ->
-                if (runAttemptCount >= MAX_ATTEMPTS) Result.failure() else Result.retry()
+                if (runAttemptCount >= MAX_ATTEMPTS) {
+                    if (this is ControlWorker && session.active) runCatching {
+                        session.state.diagnostics.requests().filter { !it.optBoolean("complete") }.forEach {
+                            session.state.diagnostics.recordAttempt(it.getString("id"), null, "retry_limit", session.core.time)
+                        }
+                    }
+                    Result.failure()
+                } else Result.retry()
         }
     }
 
@@ -223,4 +250,8 @@ internal class UserReportWorker(context: Context, params: WorkerParameters) :
 internal class KnobPollWorker(context: Context, params: WorkerParameters) :
     TelemetryWorker(context, params) {
     override fun run(engine: TelemetryEngine): TelemetryRun = engine.runKnobPoll()
+}
+
+internal class ControlWorker(context: Context, params: WorkerParameters) : TelemetryWorker(context, params) {
+    override fun run(engine: TelemetryEngine) = engine.runControl()
 }

@@ -100,7 +100,15 @@ class RingingService : Service() {
             processPlayer?.let { return it }
             synchronized(this) {
                 processPlayer?.let { return it }
-                val created = RingtonePlayer(context.applicationContext, core.ringLog, dispatchPlayback = { core.writer.post(it) })
+                val created = RingtonePlayer(
+                    context.applicationContext,
+                    core.ringLog,
+                    isRingingOwner = { callId ->
+                        val calls = core.repository.activeCalls()
+                        calls.firstOrNull()?.callId == callId && calls.all { it.state == CoreCallState.RINGING }
+                    },
+                    dispatchPlayback = { core.writer.post(it) },
+                )
                 processPlayer = created
                 return created
             }

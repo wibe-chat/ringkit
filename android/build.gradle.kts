@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 group = "com.wibechat.ringkit"
 version = "1.0-SNAPSHOT"
 
@@ -25,10 +27,25 @@ plugins {
     id("com.android.library")
 }
 
+// Content identity survives pub archives and path dependencies; no Git on the host or device.
+val nativeIdentityInputs = (fileTree("src/main").files +
+    listOf(file("build.gradle.kts"), file("consumer-rules.pro"), file("../pubspec.yaml")))
+    .filter { it.isFile }.sortedBy { it.relativeTo(projectDir.parentFile).invariantSeparatorsPath }
+val nativeDigest = MessageDigest.getInstance("SHA-256")
+nativeIdentityInputs.forEach { input ->
+    nativeDigest.update(input.relativeTo(projectDir.parentFile).invariantSeparatorsPath.toByteArray(Charsets.UTF_8))
+    nativeDigest.update(0.toByte())
+    nativeDigest.update(input.readBytes())
+    nativeDigest.update(0.toByte())
+}
+val nativeBuildId = "sha256:" + nativeDigest.digest().joinToString("") { "%02x".format(it) }
+val sdkVersion = Regex("(?m)^version: (.+)$").find(file("../pubspec.yaml").readText())?.groupValues?.get(1) ?: "unknown"
+
 android {
     namespace = "com.wibechat.ringkit"
 
     compileSdk = 36
+    buildFeatures { buildConfig = true }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -46,6 +63,8 @@ android {
 
     defaultConfig {
         minSdk = 26
+        buildConfigField("String", "RINGKIT_VERSION", "\"$sdkVersion\"")
+        buildConfigField("String", "RINGKIT_BUILD_ID", "\"$nativeBuildId\"")
         // §13: propagate the plugin's R8 keep rules to every consuming app's
         // release build (androidx.work Room DB + workers are reflectively built).
         consumerProguardFiles("consumer-rules.pro")

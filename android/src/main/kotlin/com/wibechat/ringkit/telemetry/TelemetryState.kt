@@ -3,6 +3,7 @@ package com.wibechat.ringkit.telemetry
 import com.wibechat.ringkit.core.CoreLogLevel
 import java.io.File
 import java.io.FileOutputStream
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -39,6 +40,55 @@ internal class TelemetryState(private val file: File, private val installId: Str
 
     private val lock = Any()
     private var data: JSONObject = load()
+
+    /** Workers share one budget/send critical section; filesystem capture remains asynchronous. */
+    val operationLock = Any()
+    val diagnostics by lazy { DiagnosticStore(File(file.parentFile, "diagnostic-requests.json"), installId) }
+    val serverProtocol: Int get() = synchronized(lock) { data.optInt("serverProtocol", 1) }
+    val diagnosticsEnabled: Boolean get() = synchronized(lock) { data.optBoolean("diagnosticsEnabled") }
+    fun negotiation(protocol: Int, enabled: Boolean) = mutate {
+        it.put("serverProtocol", protocol).put("diagnosticsEnabled", enabled)
+    }
+    fun metadataDue(day: String, identity: String): Boolean = synchronized(lock) {
+        data.optBoolean("metadataRequested") || data.optString("metadataDay") != day || data.optString("metadataIdentity") != identity
+    }
+    fun requestMetadata() = mutate { it.put("metadataRequested", true) }
+    fun metadataSent(day: String, identity: String) = mutate { it.put("metadataDay", day).put("metadataIdentity", identity).put("metadataRequested", false) }
+    fun controlDelay(boot: Int, elapsed: Long): Long = synchronized(lock) {
+        if (data.optInt("controlBoot", -1) != boot) 0L else (30_000L - (elapsed - data.optLong("controlElapsed"))).coerceAtLeast(0)
+    }
+    fun reserveControlEnqueue(boot: Int, elapsed: Long, interval: Long): Boolean {
+        var due = false
+        mutate {
+            due = it.optInt("controlBoot", -1) != boot || elapsed - it.optLong("controlElapsed", -interval) >= interval
+            if (due) it.put("controlBoot", boot).put("controlElapsed", elapsed)
+        }
+        return due
+    }
+    fun controlBytes(day: String): Int = synchronized(lock) {
+        if (data.optString("controlDay") == day) data.optInt("controlBytes") else 0
+    }
+    fun addControlBytes(day: String, count: Int) = mutate {
+        val used = if (it.optString("controlDay") == day) it.optInt("controlBytes") else 0
+        it.put("controlDay", day).put("controlBytes", used + count)
+    }
+    var pendingUserReport: JSONObject?
+        get() = synchronized(lock) { data.optJSONObject("pendingUserReport")?.let { JSONObject(it.toString()) } }
+        set(value) = mutateStrict { it.put("pendingUserReport", value ?: JSONObject.NULL) }
+    var pendingPull: JSONArray?
+        get() = synchronized(lock) { data.optJSONArray("pendingPull")?.let { JSONArray(it.toString()) } }
+        set(value) = mutateStrict { it.put("pendingPull", value ?: JSONObject.NULL) }
+
+    private fun mutateStrict(block: (JSONObject) -> Unit) = synchronized(lock) {
+        val next = JSONObject(data.toString())
+        block(next)
+        file.parentFile?.mkdirs()
+        val tmp = File(file.parentFile, file.name + ".tmp")
+        val envelope = JSONObject().put("v", SCHEMA_VERSION).put("installId", installId).put("data", next)
+        FileOutputStream(tmp).use { out -> out.write(envelope.toString().toByteArray(Charsets.UTF_8)); out.fd.sync() }
+        check(tmp.renameTo(file)) { "telemetry report journal rename failed" }
+        data = next
+    }
 
     // ── identity / token ─────────────────────────────────────────────────
 

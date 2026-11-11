@@ -30,7 +30,7 @@ else
 fi
 psql_test < supabase/tests/fresh_fixture.sql
 if [[ ${FRESH_BASELINE:-0} != 1 ]]; then
-  psql_test < supabase/fresh-project/supabase/migrations/20261015141246_fresh_telemetry.sql
+  for migration in supabase/fresh-project/supabase/migrations/*.sql; do psql_test < "$migration"; done
 fi
 psql_test < supabase/tests/fresh_test.sql
 psql_test < supabase/tests/registration_test.sql

@@ -78,6 +78,7 @@ internal class RingtonePlayer(
     private val ringLog: RingLog,
     private val backend: RingPlaybackBackend = AndroidRingPlaybackBackend(context),
     private val scheduler: RingPlaybackScheduler = HandlerRingPlaybackScheduler(),
+    private val isRingingOwner: (String) -> Boolean = { true },
     private val dispatchPlayback: (() -> Unit) -> Unit,
 ) {
     data class RingOutcome(
@@ -102,6 +103,7 @@ internal class RingtonePlayer(
     private var lastFailure = "none"
     private var lastFocusResult = "notRequested"
     private var audioSnapshot: Map<String, String> = emptyMap()
+    private var failureReported = false
     private var focusRequest: AudioFocusRequest? = null
     private var vibrating = false
 
@@ -214,6 +216,7 @@ internal class RingtonePlayer(
         attemptedRungs.clear()
         lastFailure = "none"
         lastFocusResult = "notRequested"
+        failureReported = false
         audioSnapshot = captureAudioSnapshot()
     }
 
@@ -264,28 +267,42 @@ internal class RingtonePlayer(
                     "RingtonePlayer.advance",
                     callId,
                     "${currentRung.name.lowercase()} rung failed",
-                    mapOf("sourceKind" to sourceKind(source)),
-                    error,
+                    // OEM exception messages can contain the private ringtone URI.
+                    mapOf("sourceKind" to sourceKind(source), "errorType" to error.javaClass.simpleName),
                 )
                 rung = currentRung.after()
             }
         }
-        val callId = activeCallId
+        val callId = activeCallId ?: return null
+        val failedGeneration = generation
         releaseActiveEngine()
         emitState(RingAudioState.Failed("everyRungFailed"))
+        // Observers may synchronously stop or replace a session.
+        if (generation != failedGeneration || activeCallId != callId) return null
+        val failureContext = mapOf(
+            "sourceKind" to (activeSource?.let(::sourceKind) ?: "unknown"),
+            "attempted" to attemptedRungs.joinToString(","),
+            "lastFailure" to lastFailure,
+            "focusResult" to lastFocusResult,
+            "soundExpected" to "true",
+        ) + audioSnapshot
         ringLog.log(
             CoreLogLevel.ERROR,
             "ring",
             "RingtonePlayer.advance",
             callId,
             "every rung failed — silent ring",
-            mapOf(
-                "sourceKind" to (activeSource?.let(::sourceKind) ?: "unknown"),
-                "attempted" to attemptedRungs.joinToString(","),
-                "lastFailure" to lastFailure,
-                "focusResult" to lastFocusResult,
-            ) + audioSnapshot,
+            failureContext,
         )
+        if (!failureReported && isRingingOwner(callId)) {
+            failureReported = true
+            ringLog.incident(
+                RingLog.IncidentType.RING_AUDIO_FAILED,
+                "RingtonePlayer.advance",
+                callId,
+                data = failureContext,
+            )
+        }
         abandonFocus()
         return null
     }
@@ -333,7 +350,7 @@ internal class RingtonePlayer(
         } catch (error: Exception) {
             lastFailure = "probeFailed:${engine.name}:${error.javaClass.simpleName}"
             ringLog.log(CoreLogLevel.ERROR, "ring", "RingtonePlayer.verifyPlayback", activeCallId,
-                "playback probe failed", mapOf("engine" to engine.name), error)
+                "playback probe failed", mapOf("engine" to engine.name, "errorType" to error.javaClass.simpleName))
             releaseActiveEngine()
             advance(fallback)
             return
@@ -397,7 +414,7 @@ internal class RingtonePlayer(
                 } else {
                     ringLog.log(
                         CoreLogLevel.ERROR, "ring", "RingtonePlayer.resolveSource", callId,
-                        "raw:$name unresolvable (keep.xml? R8?) — device default",
+                        "raw ringtone unresolvable (keep.xml? R8?) — device default",
                     )
                     deviceDefaultRingtone(callId)
                 }
@@ -406,7 +423,7 @@ internal class RingtonePlayer(
             else -> {
                 ringLog.log(
                     CoreLogLevel.ERROR, "ring", "RingtonePlayer.resolveSource", callId,
-                    "unknown ringtone grammar — device default", mapOf("spec" to spec),
+                    "unknown ringtone grammar — device default", mapOf("sourceKind" to "unsupported"),
                 )
                 deviceDefaultRingtone(callId)
             }

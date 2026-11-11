@@ -182,13 +182,13 @@ class TelemetryEngineTest {
     }
 
     @Test
-    fun `successful gated uploads count their gzipped bytes`() {
+    fun `successful gated uploads count decoded UTF8 request bytes like the server`() {
         val h = EngineHarness()
         h.state.deviceToken = "tok-1"
         h.writeIncident()
         assertEquals(TelemetryRun.OK, h.engine().runIncidents())
         assertEquals(
-            h.transport.sent.single().gzippedSize,
+            h.transport.sent.single().payload.toString().toByteArray(Charsets.UTF_8).size,
             h.state.bytesToday(TelemetryEngine.dayUtc(h.time.wall)),
         )
     }
@@ -429,4 +429,19 @@ class TelemetryEngineTest {
         assertTrue("c-new" in records, "recent records ship")
         assertFalse("c-old" in records, "records outside the window stay home")
     }
+    @Test fun r14_legacy_pull_retry_keeps_the_original_snapshot() {
+        val h = EngineHarness()
+        h.state.deviceToken = "test-token"
+        h.state.applyKnobs(null, null, false, false, true, null)
+        h.ringLog.log(CoreLogLevel.INFO, "test", "before", "call-one", "original")
+        h.transport.defaultResponse = { CheckinResult.Http(503, null) }
+        assertEquals(TelemetryRun.RETRY, h.engine().runPull())
+        val original = h.transport.sent.single().payload.toString()
+        h.time.advanceMs(60_000)
+        h.ringLog.log(CoreLogLevel.INFO, "test", "after", "call-two", "arrived later")
+        h.transport.defaultResponse = { CheckinResult.Http(200, FakeTransport.okBody()) }
+        assertEquals(TelemetryRun.OK, h.engine().runPull())
+        assertEquals(original, h.transport.sent.last().payload.toString())
+    }
+
 }

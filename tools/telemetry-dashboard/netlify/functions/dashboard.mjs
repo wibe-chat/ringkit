@@ -16,6 +16,7 @@
 //   SUPABASE_SERVICE_ROLE_KEY   — Supabase → Settings → API → service_role (secret)
 
 import { InputError, report, readAll, orderRecords } from "../lib/analytics.mjs";
+import { DIAGNOSTIC_CLIENT } from "../lib/diagnostics-ui.mjs";
 import { REPORT_STYLE, REPORT_CONTROLS, REPORT_CLIENT } from "../lib/analytics-ui.mjs";
 
 const SB = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
@@ -133,10 +134,12 @@ export default async (req) => {
 
     if (api === "device") {
       const id = url.searchParams.get("install") ?? "";
-      const [dev, inc, hb] = await Promise.all([
-        rest("devices?select=install_id,app_id,package_name,device_label,manufacturer,model,sdk_int,app_version,plugin_version,first_seen,last_seen,log_level,pull_requested,sampled,killed,budget_kb,bytes_today&install_id=eq." + enc(id) + "&limit=1"),
-        rest("incidents?select=id,kind,fingerprint,call_id,device_ts,server_ts,clock_offset_ms,payload_path&install_id=eq." + enc(id) + "&order=server_ts.desc&limit=100"),
+      const [dev, inc, hb, requestHistory, activeRequests] = await Promise.all([
+        rest("devices?select=install_id,app_id,package_name,device_label,manufacturer,model,sdk_int,app_version,plugin_version,first_seen,last_seen,log_level,pull_requested,sampled,killed,budget_kb,bytes_today,sdk_build_id,telemetry_protocol,capabilities,host_version_code,host_debuggable,diagnostics_enabled,control_bytes_today,last_control_at&install_id=eq." + enc(id) + "&limit=1"),
+        rest("incidents?select=id,kind,fingerprint,call_id,device_ts,server_ts,clock_offset_ms,payload_path,identity&install_id=eq." + enc(id) + "&order=server_ts.desc&limit=100"),
         rest("heartbeats?select=day,counters,fingerprints,received_at&install_id=eq." + enc(id) + "&order=day.desc&limit=14"),
+        rest("diagnostic_requests?select=*&install_id=eq." + enc(id) + "&order=requested_at.desc&limit=21"),
+        rest("diagnostic_requests?select=*&install_id=eq." + enc(id) + "&state=in.(queued,offered,acknowledged,collecting)&order=requested_at.desc&limit=2"),
       ]);
       if (!dev || !dev[0]) return json(404, { error: "no such device" });
       const fps = [...new Set((inc || []).map((r) => r.fingerprint).filter(Boolean))];
@@ -146,12 +149,15 @@ export default async (req) => {
         byFp = Object.fromEntries((issues || []).map((i) => [i.fingerprint, i]));
       }
       const incidents = (inc || []).map((r) => ({ ...r, issue: byFp[r.fingerprint] ?? null }));
-      return json(200, { device: dev[0], incidents, heartbeats: hb || [] });
+      const requests = [...new Map([...(activeRequests || []), ...(requestHistory || []).slice(0,20)].map(r => [r.id,r])).values()];
+      const ids = requests.map(r => r.id);
+      const parts = ids.length ? await rest("diagnostic_parts?select=*&request_id=in.(" + ids.map(enc).join(",") + ")&order=received_at.desc&limit=501") : [];
+      return json(200, { device: dev[0], incidents, heartbeats: hb || [], requests, parts: (parts || []).slice(0,500), requestsTruncated: (requestHistory || []).length > 20, partsTruncated: (parts || []).length > 500 });
     }
 
     if (api === "payload") {
       const path = url.searchParams.get("path") ?? "";
-      if (!/^(incidents|pulls)\/[A-Za-z0-9\-/.]+\.gz$/.test(path) || path.split("/").some((segment) => !segment || segment === "." || segment === "..")) return json(400, { error: "bad path" });
+      if (!/^(incidents|pulls|diagnostics)\/[A-Za-z0-9\-/.]+\.gz$/.test(path) || path.split("/").some((segment) => !segment || segment === "." || segment === "..")) return json(400, { error: "bad path" });
       const r = await fetch(SB + "/storage/v1/object/ringkit-logs/" + path, { headers: AUTH, signal: AbortSignal.timeout(15000) });
       if (!r.ok) return json(404, { error: "no payload" });
       const text = await gunzipText(r.body);
@@ -167,6 +173,28 @@ export default async (req) => {
         try { const record = JSON.parse(l); return record && typeof record === "object" && !Array.isArray(record) ? record : { _raw: l }; } catch { return { _raw: l }; }
       });
       return json(200, { records: orderRecords(records), truncated: lines.length > recordLimit, recordLimit });
+    }
+
+    if (api === "diagnostic" && req.method === "POST") {
+      const b = await req.json().catch(() => ({}));
+      const uuid = x => typeof x === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(x);
+      if (!uuid(b.install)) return json(400, { error: "invalid installation" });
+      const rpc = (name, args) => rest("rpc/" + name, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(args) });
+      if (b.action === "enroll" && typeof b.enabled === "boolean") return json(200, await rpc("ringkit_diagnostic_enroll", { p_install: b.install, p_enabled: b.enabled }));
+      if (b.action === "start" && ["diagnostic_session", "full_buffer"].includes(b.kind)) {
+        const result = await rpc("ringkit_diagnostic_request", { p_install: b.install, p_kind: b.kind });
+        return result?.status === "unsupported" ? json(409, { error: "Install a supported build, enable diagnostics, and open the app first." }) : json(200, result);
+      }
+      if (!uuid(b.request)) return json(400, { error: "invalid request" });
+      if (b.action === "stop") return json(200, await rpc("ringkit_diagnostic_cancel", { p_install: b.install, p_request: b.request }));
+      if (b.action === "observe" && typeof b.text === "string" && b.text.length <= 1000 && typeof b.observed_at === "string" && /(?:Z|[+-]\d{2}:\d{2})$/.test(b.observed_at) && Number.isFinite(Date.parse(b.observed_at))) {
+        const rows = await rest("diagnostic_requests?install_id=eq." + enc(b.install) + "&id=eq." + enc(b.request) + "&select=id", {
+          method: "PATCH", headers: { "Content-Type": "application/json", Prefer: "return=representation" },
+          body: JSON.stringify({ tester_observation: { text: b.text.trim(), observed_at: new Date(b.observed_at).toISOString(), recorded_at: new Date().toISOString() } }),
+        });
+        return rows?.length ? json(200, { ok: true }) : json(404, { error: "request not found" });
+      }
+      return json(400, { error: "invalid diagnostic action or test time" });
     }
 
     if (api === "knob" && req.method === "POST") {
@@ -258,7 +286,8 @@ const HTML = `<!doctype html>
   header{display:flex;gap:12px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5;flex-wrap:wrap}
   header h1{font-size:15px;margin:0;font-weight:600}header h1 span{color:var(--dim);font-weight:400}
   .grow{flex:1}
-  select,input,button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit}
+  select,input,button,textarea{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit}
+  .rec label{display:block;margin:12px 0 4px}.rec textarea{display:block;resize:vertical;min-height:90px;width:100%;margin-top:6px}.rec label input{display:block;width:100%;margin-top:6px}.kv div{overflow-wrap:anywhere;min-width:0}
   button{cursor:pointer}button:hover{border-color:var(--accent)}
   .tabs button.on{background:var(--accent);border-color:var(--accent);color:#fff}
   main{padding:16px;max-width:1400px;margin:0 auto}
@@ -377,28 +406,30 @@ function openDevice(id){var b=el('drawerBody'),load=++DRAWER_ID;DRAWER_OPEN=true
       '<div>budget today</div><div>'+kb(v.bytes_today)+' / '+esc(v.budget_kb)+' KB</div></div>';
     s+='<div class="row"><span class="dim">capture level</span> <select data-act="level" data-install="'+esc(v.install_id)+'">'+
       ['none','error','info','verbose'].map(function(l){return '<option'+(l===v.log_level?' selected':'')+'>'+l+'</option>'}).join('')+'</select>'+
-      '<button data-act="pull" data-install="'+esc(v.install_id)+'">'+(v.pull_requested?'pull requested':'Request full buffer')+'</button>'+
+      '<button data-act="pull" data-install="'+esc(v.install_id)+'" data-v2="'+(v.telemetry_protocol>=2&&v.diagnostics_enabled&&((v.capabilities||[]).indexOf('correlated_pull')>=0))+'">'+(v.pull_requested?'Legacy pull pending (acknowledgement unavailable)':'Request retained buffer')+'</button>'+
       (v.killed?'<span class="pill killed">telemetry killed</span>':'')+'</div>';
+    s+=diagnosticPanel(d);
     s+='<h2>Incidents <span class="dim">('+d.incidents.length+')</span></h2>';
     s+='<button data-act="deviceTimeline" data-install="'+esc(v.install_id)+'">View captured timeline</button>';
     if(!d.incidents.length)s+='<div class="dim">No retained incident uploads</div>';
     else{s+='<table><thead><tr><th>When</th><th>Type</th><th>Codepoint</th><th>Call</th><th></th></tr></thead><tbody>';
       d.incidents.forEach(function(i){var it=i.issue||{};
         s+='<tr><td>'+ago(i.server_ts)+' ago</td><td>'+esc(i.kind==='pull'?'pull':(it.incident_type||i.kind))+'</td>'+
-        '<td class="mono">'+esc(it.codepoint||'')+'</td><td class="mono dim">'+esc(i.call_id||'')+'</td>'+
+        '<td class="mono">'+esc(it.codepoint||'')+'<br>Captured build: '+esc((i.identity||{}).sdk_build_id||'unknown')+'</td><td class="mono dim">'+esc(i.call_id||'')+'</td>'+
         '<td><button data-act="payload" data-path="'+esc(encodeURIComponent(i.payload_path))+'">log</button></td></tr>'});
       s+='</tbody></table>'}
     if(d.heartbeats.length)s+='<h2>Latest heartbeat <span class="dim">'+esc(d.heartbeats[0].day)+'</span></h2><pre>'+esc(JSON.stringify(d.heartbeats[0].counters,null,1))+'</pre>';
     b.innerHTML=s}).catch(function(e){if(load===DRAWER_ID)b.innerHTML='<div class="empty err">'+esc(e.message)+'</div>'})}
 
-function viewPayload(p){var b=el('drawerBody'),back=DRAWER_OPEN?{html:b.innerHTML,records:LOG_RECORDS}:null,load=++DRAWER_ID;DRAWER_OPEN=true;b.innerHTML='<button data-act="back">&larr; back</button><div class="empty">Decompressing...</div>';
+function viewPayload(p,offset){var b=el('drawerBody'),back=DRAWER_OPEN?{html:b.innerHTML,records:LOG_RECORDS}:null,load=++DRAWER_ID;DRAWER_OPEN=true;b.innerHTML='<button data-act="back">&larr; back</button><div class="empty">Decompressing...</div>';
   el('drawer').classList.add('open');
   window.__back=back;
   api('payload',{qs:'&path='+p}).then(function(d){
-    if(load!==DRAWER_ID)return;LOG_RECORDS=d.records;LOG_VISIBLE=500;b.innerHTML='<button data-act="back">&larr; back</button><h2>Captured log timeline</h2><p class="notice">Ordered by boot and elapsed time when available. Displayed wall time is the device clock. Each upload contains a bounded slice of available logs.</p>'+(d.truncated?'<p class="warning">This upload exceeds the record limit. Only its latest '+d.recordLimit+' records are available here.</p>':'')+'<label>Call ID <input id="logCallFilter" placeholder="Filter exact call ID"></label><p class="dim" id="logCount"></p><div id="logRecords"></div><button id="moreLogs" data-act="moreLogs" hidden>Show 500 more records</button>';renderLogRecords()
+    if(load!==DRAWER_ID)return;LOG_RECORDS=d.records;LOG_VISIBLE=500;b.innerHTML='<button data-act="back">&larr; back</button><h2>Captured log timeline</h2><p class="notice">Ordered by boot and elapsed time when available. Displayed wall time is the device clock. Each upload contains a bounded slice of available logs.</p>'+(d.truncated?'<p class="warning">This upload exceeds the record limit. Only its latest '+d.recordLimit+' records are available here.</p>':'')+narrativeHtml(d.records,offset)+'<label>Call ID <input id="logCallFilter" placeholder="Filter exact call ID"></label><p class="dim" id="logCount"></p><div id="logRecords"></div><button id="moreLogs" data-act="moreLogs" hidden>Show 500 more records</button>';renderLogRecords()
   }).catch(function(e){if(load===DRAWER_ID)b.innerHTML='<button data-act="back">&larr; back</button><div class="empty err">'+esc(e.message)+'</div>'})}
 
 ${REPORT_CLIENT}
+${DIAGNOSTIC_CLIENT}
 
 function toast(m){var t=document.createElement('div');t.textContent=m;
   t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#2f81f7;color:#fff;padding:8px 16px;border-radius:6px;z-index:60';
@@ -413,11 +444,13 @@ document.addEventListener('click',function(e){var t=e.target.closest('[data-act]
   else if(act==='logout')logout();
   else if(act==='device')openDevice(t.getAttribute('data-install'));
   else if(act==='close')closeDrawer();
-  else if(act==='payload'){e.stopPropagation();viewPayload(t.getAttribute('data-path'))}
+  else if(act==='payload'){e.stopPropagation();viewPayload(t.getAttribute('data-path'),t.getAttribute('data-offset')?Number(t.getAttribute('data-offset')):null)}
   else if(act==='back'){DRAWER_ID++;if(window.__back){el('drawerBody').innerHTML=window.__back.html;LOG_RECORDS=window.__back.records;window.__back=null}else closeDrawer()}
   else if(act==='moreLogs'){LOG_VISIBLE+=500;renderLogRecords()}
+  else if(act.indexOf('diagnostic')===0){diagnosticAction(act,t)}
   else if(act==='pull'){var id=t.getAttribute('data-install'),drawer= DRAWER_ID;
-    api('knob',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({install:id,pull_requested:true})}).then(function(){toast('full-buffer pull requested');if(drawer===DRAWER_ID)openDevice(id)})}
+    var v2=t.getAttribute('data-v2')==='true';
+    api(v2?'diagnostic':'knob',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(v2?{install:id,action:'start',kind:'full_buffer'}:{install:id,pull_requested:true})}).then(function(){toast('full-buffer pull requested');if(drawer===DRAWER_ID)openDevice(id)})}
   else if(act==='keyCopy'){navigator.clipboard.writeText(t.getAttribute('data-key')).then(function(){toast('key copied')})}
   else if(act==='keyCreate'){var na=el('nkApp').value.trim();if(!na){toast('enter an app name');return}
     api('keyCreate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({app_id:na,label:el('nkLabel').value.trim()})}).then(function(){toast('key created');reload()})}

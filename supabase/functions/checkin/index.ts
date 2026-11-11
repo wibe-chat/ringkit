@@ -18,6 +18,8 @@
 // ever lost by a failed upload. Incident retries are idempotent per
 // (install_id, fingerprint, device_ts).
 
+import { diagnosticCheckin, identity, uuid } from "./diagnostics.ts";
+
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const supabase = createClient(
@@ -89,6 +91,8 @@ function knobs(row: Record<string, unknown>, extra: Record<string, unknown> = {}
     sampled: row.sampled ?? false,
     budget_kb: row.budget_kb ?? 200,
     kill: row.kill ?? false,
+    telemetry_protocol: row.telemetry_protocol ?? 2,
+    diagnostics_enabled: row.diagnostics_enabled ?? false,
     ...extra,
   };
 }
@@ -108,9 +112,10 @@ Deno.serve(async (req: Request) => {
   }
   const kind: string = body?.kind ?? "";
   const installId: string = body?.install_id ?? "";
-  if (!installId || !kind) return json(400, { error: "missing fields" });
+  if (!uuid(installId) || !kind) return json(400, { error: "missing fields" });
 
   try {
+    if (kind === "control" || kind === "diagnostic_report") return await diagnosticCheckin(supabase, body, token, raw.byteLength);
     // ── register: per-app fleet key auth (fleet_keys.api_key → app_id) ────
     if (kind === "register") {
       const { data: key, error } = await supabase
@@ -129,7 +134,11 @@ Deno.serve(async (req: Request) => {
       });
       if (rpcErr?.code === "42501") return json(401, { error: "unauthorized" });
       if (rpcErr) throw new Error(rpcErr.message);
-      return json(200, data);
+      const { data: capabilities, error: identityError } = await supabase.rpc("ringkit_identity", {
+        p_install: installId, p_identity: identity(body.device),
+      });
+      if (identityError) throw new Error("identity refresh failed");
+      return json(200, { ...data, ...capabilities });
     }
 
     // ── all other kinds: device-token auth + budget gate ─────────────────
@@ -141,12 +150,17 @@ Deno.serve(async (req: Request) => {
     });
     if (gateErr) throw new Error(gateErr.message);
     if (gate.status === "unauthorized") return json(401, { error: "unauthorized" });
-    if (gate.status === "over_budget") return json(413, knobs(gate, { error: "over budget" }));
 
     const clockOffsetMs = typeof body.device_wall_ms === "number"
       ? Date.now() - body.device_wall_ms
       : null;
 
+    const { data: capabilities, error: identityError } = await supabase.rpc("ringkit_identity", {
+      p_install: installId, p_identity: identity(body.device),
+    });
+    if (identityError) throw new Error("identity refresh failed");
+    Object.assign(gate, capabilities);
+    if (gate.status === "over_budget") return json(413, knobs(gate, { error: "over budget" }));
     if (kind === "heartbeat") {
       // Fold the explicit dropped_logs field into the counters map so the
       // sink-drop signal survives into fleet_daily (contract carries both).
@@ -177,7 +191,7 @@ Deno.serve(async (req: Request) => {
       // bookkeeping retry re-uploads under a new path and the orphan object is
       // TTL-purged; a true duplicate retry removes its redundant object below.
       await uploadPayload(path, inc.records_gzip_b64);
-      const { data: fresh, error } = await supabase.rpc("ringkit_record_incident", {
+      const { data: fresh, error } = await supabase.rpc("ringkit_record_incident_v2", {
         p_install: installId,
         p_fingerprint: inc.fingerprint,
         p_type: inc.incident_type ?? "unknown",
@@ -188,6 +202,7 @@ Deno.serve(async (req: Request) => {
         p_kind: kind,
         p_payload_path: path,
         p_clock_offset_ms: clockOffsetMs,
+        p_identity: identity(inc.identity),
       });
       if (error) throw new Error(error.message);
       if (!fresh) {
@@ -226,7 +241,7 @@ Deno.serve(async (req: Request) => {
 
     return json(400, { error: `unknown kind: ${kind}` }); // unknown KINDS are errors; unknown FIELDS are ignored (fwd compat)
   } catch (e) {
-    console.error("checkin error:", e instanceof Error ? e.message : e);
+    console.error("checkin failed");
     return json(500, { error: "internal" });
   }
 });
