@@ -80,7 +80,7 @@ To use this branch's **0.2.1 diagnostics preview**, install from Git instead. Th
 dependencies:
   ringkit:
     git:
-      url: https://github.com/Rishin-zartek/ringkit.git
+      url: https://github.com/wibe-chat/ringkit.git
       ref: advanced-analtycs # development; pin a reviewed full commit SHA for release
 ```
 
@@ -144,7 +144,7 @@ Use the Git dependency above. For a reproducible release, replace `advanced-anal
 reviewed full commit SHA and retain the launcher's `pubspec.lock`. To see the branch tip:
 
 ```sh
-git ls-remote https://github.com/Rishin-zartek/ringkit.git refs/heads/advanced-analtycs
+git ls-remote https://github.com/wibe-chat/ringkit.git refs/heads/advanced-analtycs
 ```
 
 Check the launcher's `pubspec.yaml`, any `pubspec_overrides.yaml`, and its resolved lockfile for
@@ -155,7 +155,7 @@ an intentional override belongs in the launcher or its Pub workspace resolution:
 dependency_overrides:
   ringkit:
     git:
-      url: https://github.com/Rishin-zartek/ringkit.git
+      url: https://github.com/wibe-chat/ringkit.git
       ref: advanced-analtycs # replace with the reviewed full SHA for release
 ```
 

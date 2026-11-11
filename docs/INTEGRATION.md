@@ -55,7 +55,7 @@ Consume as a Git dependency; pin a reviewed tag or commit for reproducible build
 dependencies:
   ringkit:
     git:
-      url: https://github.com/Rishin-zartek/ringkit.git
+      url: https://github.com/wibe-chat/ringkit.git
       ref: advanced-analtycs # pin a reviewed full commit SHA for release
 ```
 
