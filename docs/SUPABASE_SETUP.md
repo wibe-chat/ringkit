@@ -20,15 +20,17 @@ Review current Supabase quotas and billing for your workload.
 
 Clone this repository and run all commands below from the repository root. With
 Node.js installed, authenticate the Supabase CLI using the account that owns your
-new project:
+new project. These commands use CLI 3.1.0 and explicitly select the hosted project with
+`--remote` ([CLI v3 targeting](https://supabase.com/changelog/supabase-cli-v3)):
 
 ```sh
-npx supabase@latest login
-npx supabase@latest --workdir supabase/fresh-project db push --project-ref YOUR_PROJECT_REF --dry-run
-npx supabase@latest --workdir supabase/fresh-project db push --project-ref YOUR_PROJECT_REF
+npx supabase@3.1.0 login
+npx supabase@3.1.0 --workdir supabase/fresh-project db push --remote=YOUR_PROJECT_REF --dry-run
+npx supabase@3.1.0 --workdir supabase/fresh-project db push --remote=YOUR_PROJECT_REF
 ```
 
-Check that the dry run lists **only the fresh telemetry baseline**. Supply the
+Check that the dry run lists **the fresh telemetry baseline followed by the
+`remote_diagnostics` migration from the fresh-project tree**, with no legacy-tree migrations. Supply the
 database password through the CLI prompt, not in a committed file or command-line
 argument. Do not run a plain `supabase db push` from the repository root: that
 selects the legacy, delta-only migrations instead.
@@ -50,8 +52,8 @@ Never put it in Flutter, Git, screenshots or logs.
 Deploy the two checked-in functions from the repository root:
 
 ```sh
-npx supabase@latest functions deploy checkin --project-ref YOUR_PROJECT_REF --no-verify-jwt --use-api
-npx supabase@latest functions deploy purge --project-ref YOUR_PROJECT_REF --no-verify-jwt --use-api
+npx supabase@3.1.0 functions deploy checkin --remote=YOUR_PROJECT_REF --no-verify-jwt --use-api
+npx supabase@3.1.0 functions deploy purge --remote=YOUR_PROJECT_REF --no-verify-jwt --use-api
 ```
 
 `--use-api` bundles remotely without local Docker. `--no-verify-jwt` is intentional:
@@ -165,18 +167,22 @@ See [Supabase's scheduled-function guide](https://supabase.com/docs/guides/funct
 
 ## 6. Verify your deployment before distributing it
 
-1. Confirm all eight telemetry tables have RLS enabled and `ringkit-logs` is
+1. Confirm all ten telemetry tables (including `diagnostic_requests` and
+   `diagnostic_parts`) have RLS enabled and `ringkit-logs` is
    private. Run the project's Supabase Security Advisor; inspect unexpected
    public table, function, view or Storage grants.
 2. POST to `checkin` without authorization and to `purge` with a fleet key: both
    must return 401. Never test purge with a valid secret and a zero-day retention.
 3. Enable telemetry in your own test app. Use its **Report issue now** action;
    confirm an installation under your app ID, an incident row, and a payload in
-   the private bucket. Registration happens lazily, so enabling alone may not
-   immediately create a row. Keep real credentials out of captured evidence.
+   the private bucket. SDK 0.2.1 refreshes metadata on activation/foreground entry;
+   older clients register before an upload. Network work is asynchronous, so
+   enabling alone is not proof of registration. Keep credentials out of captured evidence.
 4. Confirm the nightly rollup and 60-day purge complete successfully. Confirm
    an ordinary Supabase client cannot read tables or call bookkeeping RPCs.
-5. Review consent and privacy disclosures. Default uploads redact caller PII;
+5. For v2 sessions, follow the [enrollment and receipt verification steps](../README.md#5-prove-collection-before-asking-a-remote-tester-to-reproduce).
+   Background/reopen the app after enrollment and wait for acknowledgement before testing.
+6. Review consent and privacy disclosures. Default uploads redact caller PII;
    verbose capture and full-buffer pulls require special care and tester consent.
 
 The repository has local PostgreSQL contract/privilege tests and offline function

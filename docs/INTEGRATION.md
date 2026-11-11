@@ -9,7 +9,7 @@ arrived" and "user answered/declined".
 
 > **Status:** Mode 1 (Dart path) and **Mode 2 (native FCM fast path)** are both complete and
 > device-verified, as is killed-state background event delivery (a decline-while-dead reaches your
-> Dart handler). See [What's implemented vs. coming](#whats-implemented-vs-coming) before you design
+> Dart handler). See [What's implemented vs. coming](#9-whats-implemented-vs-coming) before you design
 > around not-yet-shipped features.
 
 **Related guides:** [FCM payload & Mode 1/2](FCM.md) · [Troubleshooting](TROUBLESHOOTING.md) ·
@@ -55,9 +55,14 @@ Consume as a Git dependency; pin a reviewed tag or commit for reproducible build
 dependencies:
   ringkit:
     git:
-      url: https://github.com/wibe-chat/ringkit.git
-      ref: main        # or pin a tag/commit for reproducible builds
+      url: https://github.com/Rishin-zartek/ringkit.git
+      ref: advanced-analtycs # pin a reviewed full commit SHA for release
 ```
+
+For the diagnostics preview, follow the [launcher dependency, shared configuration and
+receipt checks in the README](../README.md#integrate-the-diagnostics-build). Check overrides
+and the lockfile in the actual APK-producing app, including when RingKit arrives through a
+shared package.
 
 **Your app must set `minSdk 26`** (Android 8.0) in `android/app/build.gradle(.kts)`:
 
@@ -135,6 +140,10 @@ void _onCallEvent(CallEvent event) {
 
 Show a call (typically from your FCM handler, next section):
 
+When enabling telemetry, replace the inline configuration above with
+`buildRingKitConfig()` from the [shared configuration example](../README.md#2-share-one-complete-configuration-across-entry-points)
+and reuse it from the background handler. A later initialization with `telemetry: null` disables uploads.
+
 ```dart
 final result = await RingKit.showIncomingCall(IncomingCall(
   id: payload['rk.callId']!,           // YOUR call UUID — the idempotency key
@@ -151,7 +160,7 @@ final result = await RingKit.showIncomingCall(IncomingCall(
   ),
 ));
 
-// ALWAYS check the result — ringkit never fails silently:
+// Check the admission/degradation result; it does not prove physical audibility:
 switch (result.code) {
   case ShowCallResultCode.shown:        break;                 // ringing
   case ShowCallResultCode.degraded:     /* ringing with caveats: result.degradations
@@ -174,11 +183,21 @@ switch (result.code) {
 
 ringkit is transport-agnostic; with `firebase_messaging` you call it from both handlers.
 **Send data-only, high-priority pushes** (an FCM `notification` block would render its own UI).
+The example below assumes your Firebase setup and the shared `buildRingKitConfig()` factory
+from the README. Import `firebase_core`, `firebase_messaging`, RingKit and that configuration
+file in the host app. If you use generated Firebase options, pass the same options here as in `main()`.
 
 ```dart
 @pragma('vm:entry-point')
 Future<void> firebaseBackgroundHandler(RemoteMessage message) async {
-  // Runs in a background isolate — all ringkit COMMANDS are isolate-safe.
+  // Mode 1: runs in a separate Android isolate; foreground app singletons
+  // are not initialized here. Do not fetch configuration from the network.
+  await Firebase.initializeApp();
+  if (!RingKit.isRingMessage(message.data)) {
+    // Handle the app's non-call messages here.
+    return;
+  }
+  await RingKit.initialize(buildRingKitConfig());
   final data = message.data;
   switch (data['rk.type']) {
     case 'incoming':
