@@ -29,6 +29,7 @@ import com.wibechat.ringkit.ui.CallNotificationFactory
 import com.wibechat.ringkit.ui.RingKitChannels
 import com.wibechat.ringkit.ui.RingAudioState
 import com.wibechat.ringkit.ui.RingtonePlayer
+import com.wibechat.ringkit.ui.RingFocusOwner
 
 /**
  * The ringing FGS (PLAN §8.3): owns the RingtonePlayer, the vibrator, every
@@ -96,6 +97,17 @@ class RingingService : Service() {
         private var processPlayer: RingtonePlayer? = null
         private var fallbackSubscription: AutoCloseable? = null
 
+        internal fun stopTelecomAudio(callId: String, reason: String) {
+            processPlayer?.stopTelecomAudio(callId, reason)
+        }
+
+        internal fun focusOwnerFor(core: RingKitCore.Instance, callId: String): RingFocusOwner {
+            val session = core.telecomCalls[callId] ?: return RingFocusOwner.RINGKIT
+            return if (session.ringingSuspended || !session.bridge.hasCall(callId)) {
+                RingFocusOwner.TELECOM_SUSPENDED
+            } else RingFocusOwner.TELECOM
+        }
+
         internal fun sharedPlayer(context: Context, core: RingKitCore.Instance): RingtonePlayer {
             processPlayer?.let { return it }
             synchronized(this) {
@@ -107,6 +119,7 @@ class RingingService : Service() {
                         val calls = core.repository.activeCalls()
                         calls.firstOrNull()?.callId == callId && calls.all { it.state == CoreCallState.RINGING }
                     },
+                    focusOwnerFor = { callId -> focusOwnerFor(core, callId) },
                     dispatchPlayback = { core.writer.post(it) },
                 )
                 processPlayer = created

@@ -61,6 +61,8 @@ class TelecomAdapter internal constructor(context: Context) : TelecomBridge {
 
     private val calls = ConcurrentHashMap<String, CallHandle>()
 
+    override fun hasCall(callId: String): Boolean = calls.containsKey(callId)
+
     private sealed interface Cmd {
         object Answer : Cmd
         object Active : Cmd
@@ -97,6 +99,7 @@ class TelecomAdapter internal constructor(context: Context) : TelecomBridge {
         val ready = CompletableDeferred<Boolean>()
         adapterScope.launch {
             val commands = Channel<Cmd>(Channel.BUFFERED)
+            var registeredHandle: CallHandle? = null
             try {
                 callsManager.addCall(
                     attributes,
@@ -108,6 +111,7 @@ class TelecomAdapter internal constructor(context: Context) : TelecomBridge {
                     // this: CallControlScope (a CoroutineScope) — the call is registered.
                     val control = this@addCall
                     val handle = CallHandle(control, commands, callType)
+                    registeredHandle = handle
                     calls[call.id] = handle
                     ready.complete(true)
 
@@ -133,7 +137,8 @@ class TelecomAdapter internal constructor(context: Context) : TelecomBridge {
                 ready.complete(false)
             } finally {
                 commands.close()
-                calls.remove(call.id)
+                val handle = registeredHandle
+                if (handle != null && calls.remove(call.id, handle)) hooks.onScopeClosed(call.id)
             }
         }
         return runBlocking {

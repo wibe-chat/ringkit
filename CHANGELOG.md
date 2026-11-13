@@ -3,7 +3,10 @@
 ## 0.2.1 — unreleased
 
 - Automatically capture unrecoverable ringtone playback as a redacted, deduplicated incident;
-  preserve existing playback, focus and sound-policy behavior.
+  preserve user sound-policy behavior.
+- Delegate ringtone focus to a successful live Telecom call instead of requesting competing
+  focus. Preserve standalone/fallback focus handling; fence held/closed Telecom calls and stale
+  callbacks, and record the focus owner, request result and loss code.
 - Generate native package identity, host version/debuggable metadata and diagnostic capabilities.
   Preserve historical capture identity after updates.
 - Add opt-in bounded native diagnostic sessions, foreground command discovery, immutable retries,

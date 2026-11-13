@@ -2,6 +2,8 @@ package com.wibechat.ringkit.core
 
 import android.app.NotificationManager
 import android.content.Context
+import com.wibechat.ringkit.services.RingingService
+import com.wibechat.ringkit.ui.RingFocusOwner
 import androidx.test.core.app.ApplicationProvider
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -57,14 +59,17 @@ class TelecomWiringTest {
         var setAudioRouteResult = true
         /** Captured so tests can fire hardware callbacks (BT/watch answer, §8.7). */
         var lastHooks: TelecomHooks? = null
+        val liveCalls = mutableSetOf<String>()
         private var reg = false
 
         override val isRegistered: Boolean get() = reg
+        override fun hasCall(callId: String): Boolean = callId in liveCalls
 
         override fun addCall(call: CoreIncomingCall, hooks: TelecomHooks): Boolean {
             order.add("addCall")
             lastHooks = hooks
             reg = addCallResult
+            if (addCallResult) liveCalls.add(call.id)
             return addCallResult
         }
 
@@ -72,6 +77,7 @@ class TelecomWiringTest {
         override fun onLocalActive(callId: String) { actives.add(callId) }
         override fun onLocalDisconnect(callId: String, cause: TelecomDisconnectCause) {
             disconnects.add(callId to cause)
+            liveCalls.remove(callId)
         }
 
         override fun setAudioRoute(route: CoreAudioRoute): Boolean {
@@ -90,6 +96,105 @@ class TelecomWiringTest {
 
     private fun enableTelecom() {
         core.repository.updateConfig(core.repository.currentConfig().copy(telecomIntegration = true))
+    }
+
+    @Test
+    fun r37_focus_delegates_only_after_successful_live_addCall() {
+        enableTelecom()
+        val bridge = FakeBridge(true)
+        orchestrator(bridge).showOnWriter(TestSupport.incomingCall(id = "managed"))
+        assertEquals(RingFocusOwner.TELECOM, RingingService.focusOwnerFor(core, "managed"))
+        assertEquals(RingFocusOwner.RINGKIT, RingingService.focusOwnerFor(core, "unrelated"))
+
+        orchestrator(FakeBridge(false)).showOnWriter(TestSupport.incomingCall(id = "fallback"))
+        assertEquals(RingFocusOwner.RINGKIT, RingingService.focusOwnerFor(core, "fallback"))
+        bridge.liveCalls.remove("managed")
+        assertEquals(RingFocusOwner.TELECOM_SUSPENDED, RingingService.focusOwnerFor(core, "managed"))
+    }
+
+    @Test
+    fun r37_persisted_call_in_a_new_process_does_not_imply_telecom_ownership() {
+        enableTelecom()
+        orchestrator(FakeBridge(true)).showOnWriter(TestSupport.incomingCall(id = "managed"))
+        core.telecomCalls.clear() // New process: repository survives, live association does not.
+        assertEquals(RingFocusOwner.RINGKIT, RingingService.focusOwnerFor(core, "managed"))
+    }
+
+    @Test
+    fun r30_terminal_cleanup_uses_original_bridge_after_config_changes() {
+        enableTelecom()
+        val original = FakeBridge(true)
+        orchestrator(original).showOnWriter(TestSupport.incomingCall(id = "managed"))
+        core.repository.updateConfig(core.repository.currentConfig().copy(telecomIntegration = false))
+        val replacement = FakeBridge(false)
+
+        orchestrator(replacement).declineOnWriter("managed")
+
+        assertEquals(listOf("managed" to TelecomDisconnectCause.REJECTED), original.disconnects)
+        assertTrue(replacement.disconnects.isEmpty())
+        assertFalse(core.telecomCalls.containsKey("managed"))
+    }
+
+    @Test
+    fun r30_endAll_disconnects_each_call_once_through_its_original_bridge() {
+        enableTelecom()
+        val first = FakeBridge(true)
+        val second = FakeBridge(true)
+        orchestrator(first).showOnWriter(TestSupport.incomingCall(id = "first"))
+        orchestrator(second).showOnWriter(TestSupport.incomingCall(id = "second"))
+        core.repository.updateConfig(core.repository.currentConfig().copy(telecomIntegration = false))
+
+        orchestrator(null).endAllOnWriter()
+
+        assertEquals(listOf("first"), first.disconnects.map { it.first })
+        assertEquals(listOf("second"), second.disconnects.map { it.first })
+        assertTrue(core.telecomCalls.isEmpty())
+    }
+
+    @Test
+    fun r37_scope_close_is_fenced_to_its_original_association() {
+        enableTelecom()
+        val bridge = FakeBridge(true)
+        orchestrator(bridge).showOnWriter(TestSupport.incomingCall(id = "managed"))
+        val oldHooks = bridge.lastHooks!!
+        val replacement = TelecomCallSession(bridge)
+        core.telecomCalls["managed"] = replacement
+
+        oldHooks.onScopeClosed("managed")
+        core.writer.await { }
+
+        assertTrue(core.telecomCalls["managed"] === replacement)
+        core.telecomCalls.remove("managed")
+    }
+
+    @Test
+    fun r37_current_scope_close_clears_ownership() {
+        enableTelecom()
+        val bridge = FakeBridge(true)
+        orchestrator(bridge).showOnWriter(TestSupport.incomingCall(id = "managed"))
+        bridge.liveCalls.remove("managed")
+        bridge.lastHooks!!.onScopeClosed("managed")
+        core.writer.await { }
+        assertFalse(core.telecomCalls.containsKey("managed"))
+    }
+
+    @Test
+    fun r37_held_waiting_call_stays_silent_after_promotion_and_active_callback() {
+        enableTelecom()
+        val bridge = FakeBridge(true)
+        val orch = orchestrator(bridge)
+        orch.showOnWriter(TestSupport.incomingCall(id = "first"))
+        orch.showOnWriter(TestSupport.incomingCall(id = "waiting"))
+        val hooks = bridge.lastHooks!!
+        hooks.onSetInactive("waiting")
+        core.writer.await { }
+        orch.declineOnWriter("first")
+        hooks.onSetActive("waiting")
+        core.writer.await { }
+
+        assertEquals(RingFocusOwner.TELECOM_SUSPENDED, RingingService.focusOwnerFor(core, "waiting"))
+        assertTrue(core.telecomCalls["waiting"]!!.ringingSuspended)
+        assertEquals(CoreCallState.RINGING, core.repository.callFor("waiting")!!.state)
     }
 
     // ── lazy: telecom OFF never classloads/touches the bridge ────────────

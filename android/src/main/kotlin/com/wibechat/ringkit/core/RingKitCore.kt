@@ -35,6 +35,9 @@ object RingKitCore {
         /** §8.6 in-process signalling (orchestrator publishes on the writer). */
         val bus: CallBus = CallBus(ringLog)
 
+        /** Live successful associations only. Never persisted across a process restart. */
+        internal val telecomCalls = mutableMapOf<String, TelecomCallSession>()
+
         /**
          * §10.2 rung 1, source-agnostic: the adapter registers live delivery to
          * the designated engine here; the orchestrator emits EVERY transition's

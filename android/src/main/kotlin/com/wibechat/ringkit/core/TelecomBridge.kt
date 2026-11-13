@@ -39,6 +39,9 @@ interface TelecomBridge {
      */
     fun addCall(call: CoreIncomingCall, hooks: TelecomHooks): Boolean
 
+    /** Live per-call ownership, not account registration. Unknown bridges fail closed. */
+    fun hasCall(callId: String): Boolean = false
+
     /** Mirror a local accept (→ ACCEPTED) into Telecom (answer). No-op if unknown. */
     fun onLocalAnswer(callId: String)
 
@@ -77,7 +80,14 @@ class TelecomHooks(
     val onSetActive: (callId: String) -> Unit = {},
     /** Current endpoint changed (BT connect/disconnect, etc.) → a live AudioRouteChanged event (§6.3, M5.4). */
     val onAudioRouteChanged: (callId: String, route: CoreAudioRoute) -> Unit = { _, _ -> },
+    /** The exact live call scope ended; callbacks may outlive an old call association. */
+    val onScopeClosed: (callId: String) -> Unit = {},
 )
+
+/** Writer-confined, process-local association published only after successful addCall. */
+internal class TelecomCallSession(val bridge: TelecomBridge) {
+    var ringingSuspended: Boolean = false
+}
 
 /**
  * SDK-free disconnect cause; the adapter maps it to `android.telecom.DisconnectCause`.

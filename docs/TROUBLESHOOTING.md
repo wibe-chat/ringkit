@@ -69,6 +69,15 @@ A visible incoming-call notification does not prove audible playback. Capture `d
 - **Playback:** inspect the selected engine, focus result, startup errors and fallback transitions.
   The ladder tries MediaPlayer, the system Ringtone player for supported content URIs, then the
   bundled tone. A playing-state check cannot establish that sound was physically audible.
+- **Stops immediately after starting:** compare `focus_loss_stop` with the accept/terminal time.
+  Older builds can request ringtone focus in competition with a successful Telecom call. The
+  current implementation delegates focus only to that call's live Telecom registration and logs
+  `focus_delegated`; standalone or registration-fallback calls log `focus_requested`. Update the
+  resolved SDK in the host app, rebuild the native APK, and confirm its build identity before
+  retesting. Disabling `useTelecom` for one tester call can isolate the integration, but also removes
+  Telecom features for that call. Do not ignore every focus-loss callback or force another stream.
+  Telecom inactivity/scope closure intentionally stops delegated audio; inspect
+  `telecom_focus_stop` and its reason. Retest actual sound in foreground, background and cold state.
 - **Vibration:** `vibratorUnavailable` identifies absent hardware and `manifestVibrateRemoved`
   identifies a missing merged `VIBRATE` permission. A successful vibration API request does not
   prove physical vibration; device settings can still suppress it.

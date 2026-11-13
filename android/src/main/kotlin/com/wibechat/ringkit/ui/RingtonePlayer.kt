@@ -63,6 +63,8 @@ object RingPolicyResolver {
     }
 }
 
+internal enum class RingFocusOwner { RINGKIT, TELECOM, TELECOM_SUSPENDED }
+
 /**
  * The ring audio engine (PLAN §8.4): MediaPlayer primary → `Ringtone` fallback
  * on content:// failure (the default-ringtone settings URI and shared-storage
@@ -79,6 +81,7 @@ internal class RingtonePlayer(
     private val backend: RingPlaybackBackend = AndroidRingPlaybackBackend(context),
     private val scheduler: RingPlaybackScheduler = HandlerRingPlaybackScheduler(),
     private val isRingingOwner: (String) -> Boolean = { true },
+    private val focusOwnerFor: (String) -> RingFocusOwner = { RingFocusOwner.RINGKIT },
     private val dispatchPlayback: (() -> Unit) -> Unit,
 ) {
     data class RingOutcome(
@@ -124,8 +127,12 @@ internal class RingtonePlayer(
         stop()
         ownerSession++
         val personUri = record.info.handle?.let { "tel:$it" }
-        val policy =
+        val resolvedPolicy =
             RingPolicyResolver.resolve(context, record.options.vibrate, personUri, anyInCallState)
+        val focusOwner = focusOwnerFor(record.callId)
+        val policy = if (resolvedPolicy.sound && focusOwner == RingFocusOwner.TELECOM_SUSPENDED) {
+            resolvedPolicy.copy(sound = false, reason = "telecomInactive")
+        } else resolvedPolicy
         ringLog.log(
             CoreLogLevel.INFO, "ring", "RingtonePlayer.start", record.callId, "policy",
             mapOf("reason" to policy.reason, "sound" to policy.sound.toString(), "vibrate" to policy.vibrate.toString()) +
@@ -136,7 +143,11 @@ internal class RingtonePlayer(
         var engine: String? = null
         if (policy.sound) {
             beginAudioSession(record.callId, resolveSource(record.callId, record.options.ringtone ?: defaultRingtone))
-            requestFocus(record.callId)
+            if (focusOwner == RingFocusOwner.TELECOM) {
+                lastFocusResult = "telecom"
+                ringLog.log(CoreLogLevel.INFO, "ring", "RingtonePlayer.focus", record.callId,
+                    "focus_delegated", mapOf("focusOwner" to "telecom"))
+            } else requestFocus(record.callId)
             engine = advance(Rung.PRIMARY)
         }
         if (policy.vibrate) startVibration(record.callId)
@@ -198,6 +209,15 @@ internal class RingtonePlayer(
 
     internal val sessionToken: Long
         @Synchronized get() = ownerSession
+
+    /** Writer-dispatched, association-fenced Telecom hold/scope loss. Vibration stays owned. */
+    @Synchronized
+    internal fun stopTelecomAudio(callId: String, reason: String) {
+        if (activeCallId != callId || lastFocusResult != "telecom") return
+        ringLog.log(CoreLogLevel.INFO, "ring", "RingtonePlayer.focus", callId,
+            "telecom_focus_stop", mapOf("focusOwner" to "telecom", "reason" to reason))
+        stopAudioOnly()
+    }
 
     @Synchronized
     internal fun stopSession(token: Long) {
@@ -470,6 +490,8 @@ internal class RingtonePlayer(
                 AudioManager.AUDIOFOCUS_REQUEST_FAILED -> "failed"
                 else -> "unknown:$granted"
             }
+        ringLog.log(CoreLogLevel.INFO, "ring", "RingtonePlayer.focus", callId,
+            "focus_requested", mapOf("focusOwner" to "ringkit", "focusResult" to lastFocusResult))
         if (granted != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
             ringLog.log(
                 CoreLogLevel.INFO,
@@ -511,7 +533,8 @@ internal class RingtonePlayer(
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK,
             -> {
-                ringLog.log(CoreLogLevel.INFO, "ring", "RingtonePlayer.focus", callId, "focus_loss_stop")
+                ringLog.log(CoreLogLevel.INFO, "ring", "RingtonePlayer.focus", callId, "focus_loss_stop",
+                    mapOf("focusOwner" to "ringkit", "focusChange" to change.toString()))
                 stopAudioOnly()
             }
 

@@ -61,7 +61,7 @@ class IncomingCallOrchestrator(
      * re-enter core on the writer via the process-wide singleton — safe to
      * capture, outlives this transient orchestrator (R30, M5.3).
      */
-    private fun telecomHooks(): TelecomHooks =
+    private fun telecomHooks(session: TelecomCallSession? = null): TelecomHooks =
         TelecomHooks(
             onHardwareAnswer = { callId ->
                 core.writer.post { hookOrchestrator().acceptFromActionOnWriter(callId) }
@@ -77,9 +77,25 @@ class IncomingCallOrchestrator(
                 }
             },
             onSetActive = { callId -> trace("telecom", callId, "onSetActive (unhold)") },
-            onSetInactive = { callId -> trace("telecom", callId, "onSetInactive (hold)") },
+            onSetInactive = { callId ->
+                core.writer.post {
+                    trace("telecom", callId, "onSetInactive (hold)")
+                    if (session != null && core.telecomCalls[callId] === session) {
+                        session.ringingSuspended = true
+                        RingingService.stopTelecomAudio(callId, "inactive")
+                    }
+                }
+            },
             onAudioRouteChanged = { callId, route ->
                 core.writer.post { hookOrchestrator().emitAudioRouteChanged(callId, route) }
+            },
+            onScopeClosed = { callId ->
+                core.writer.post {
+                    if (session != null && core.telecomCalls[callId] === session) {
+                        RingingService.stopTelecomAudio(callId, "scopeClosed")
+                        core.telecomCalls.remove(callId)
+                    }
+                }
             },
         )
 
@@ -142,10 +158,11 @@ class IncomingCallOrchestrator(
      */
     private fun mirrorTelecom(result: TransitionResult, pre: CallRecord?) {
         val record = pre ?: return
-        val enabled = record.options.useTelecom ?: repository.currentConfig().telecomIntegration
+        val session = core.telecomCalls[record.callId]
+        val enabled = session != null || (record.options.useTelecom ?: repository.currentConfig().telecomIntegration)
         if (!enabled) return
-        val bridge = telecomProvider(appContext) ?: return
-        result.persistedEvents.forEach { ev ->
+        val bridge = session?.bridge ?: telecomProvider(appContext) ?: return
+        result.persistedEvents.filter { it.callId == record.callId }.forEach { ev ->
             when (ev.type) {
                 CoreEventType.ACCEPTED -> bridge.onLocalAnswer(ev.callId)
                 CoreEventType.DECLINED -> bridge.onLocalDisconnect(ev.callId, TelecomDisconnectCause.REJECTED)
@@ -153,6 +170,9 @@ class IncomingCallOrchestrator(
                 CoreEventType.CANCELLED -> bridge.onLocalDisconnect(ev.callId, causeForCancel(ev.cancelReason))
                 CoreEventType.ENDED -> bridge.onLocalDisconnect(ev.callId, causeForEnd(ev.endReason))
                 else -> {}
+            }
+            if (ev.type in setOf(CoreEventType.DECLINED, CoreEventType.TIMED_OUT, CoreEventType.CANCELLED, CoreEventType.ENDED)) {
+                core.telecomCalls.remove(ev.callId)
             }
         }
         if (CoreEffect.CHRONOMETER_START in result.effects) bridge.onLocalActive(record.callId)
@@ -246,8 +266,10 @@ class IncomingCallOrchestrator(
         // suspended in core-telecom's `coroutineScope`, bytecode-verified). Mirror
         // the TIMED_OUT terminal here too. Config-gated to avoid classloading
         // telecom/ in a non-telecom process; no-op for a callId the bridge doesn't know.
-        if (repository.currentConfig().telecomIntegration) {
-            telecomProvider(appContext)?.onLocalDisconnect(eviction.callId, TelecomDisconnectCause.MISSED)
+        val telecomSession = core.telecomCalls.remove(eviction.callId)
+        if (telecomSession != null || repository.currentConfig().telecomIntegration) {
+            (telecomSession?.bridge ?: telecomProvider(appContext))
+                ?.onLocalDisconnect(eviction.callId, TelecomDisconnectCause.MISSED)
         }
         publish(eviction.callId, result)
     }
@@ -284,8 +306,10 @@ class IncomingCallOrchestrator(
         // evaluated as OFF (which can flip row 2 back to failed). Never blocks ringing.
         val config = repository.currentConfig()
         val telecomEnabled = record.options.useTelecom ?: config.telecomIntegration
-        val telecomActive =
-            telecomEnabled && (telecomProvider(appContext)?.addCall(call, telecomHooks()) ?: false)
+        val telecomBridge = if (telecomEnabled) telecomProvider(appContext) else null
+        val telecomSession = telecomBridge?.let(::TelecomCallSession)
+        val telecomActive = telecomBridge?.addCall(call, telecomHooks(telecomSession)) == true
+        if (telecomActive) core.telecomCalls[call.id] = checkNotNull(telecomSession)
         if (telecomEnabled && !telecomActive) {
             // §8.7: registration/addCall failure ⇒ log + diagnostics + fall back
             // (never blocks ringing). diagnose() surfaces the incident.

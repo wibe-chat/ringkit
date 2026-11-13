@@ -7,6 +7,7 @@ import 'package:ringkit/ringkit.dart';
 
 /// Run with notifications allowed, normal ringer mode, and DND disabled.
 /// Confirms native playback state and lifecycle, not physical audibility.
+/// Pass --dart-define=RINGKIT_TELECOM=true to exercise live Telecom ownership.
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   late StreamSubscription<CallEvent> subscription;
@@ -23,7 +24,7 @@ void main() {
         defaultTimeoutSeconds: 15,
         connectionTimeoutSeconds: 3,
         maxConcurrentRinging: 3,
-        telecomIntegration: false,
+        telecomIntegration: const bool.fromEnvironment('RINGKIT_TELECOM'),
         manageOngoingCall: true,
         foregroundBehavior: ForegroundBehavior.headsUp,
         notificationIdBase: 424200,
@@ -83,13 +84,16 @@ void main() {
             'Native fallback must start; inspect ringer/DND and diagnostics.',
       );
 
-      // Keep ringing through the native post-start verification window.
-      await Future<void>.delayed(const Duration(milliseconds: 600));
+      // Cross post-start verification and the observed early Telecom focus loss.
+      await Future<void>.delayed(const Duration(seconds: 2));
       report = await RingKit.diagnose();
+      debugPrint('RECOVERY_SUSTAINED_DIAGNOSE $report');
       expect(
         report.ringTraces.where(
           (trace) =>
-              trace.contains(id) && trace.contains('audio state: Failed'),
+              trace.contains(id) &&
+              (trace.contains('audio state: Failed') ||
+                  trace.contains('audio state: Stopped')),
         ),
         isEmpty,
       );
@@ -115,4 +119,62 @@ void main() {
       );
     },
   );
+
+  test('ring deadline delivers timeout and clears the active call', () async {
+    final id = 'ring-deadline-${DateTime.now().millisecondsSinceEpoch}';
+    final result = await RingKit.showIncomingCall(
+      IncomingCall(
+        id: id,
+        callerName: 'Ring deadline test',
+        type: CallType.audio,
+        timeoutSeconds: 10,
+        sentAtEpochMs: DateTime.now().millisecondsSinceEpoch,
+        extra: const <String, String>{},
+        android: AndroidCallOptions(
+          ringtone: 'raw:ringkit_default_ringtone',
+          vibrate: true,
+          lockScreenVisibility: NotificationVisibility.public,
+          lockScreenBehavior: LockScreenBehavior.fullScreen,
+        ),
+      ),
+    );
+    expect(
+      result.code,
+      anyOf(ShowCallResultCode.shown, ShowCallResultCode.degraded),
+    );
+    await Future<void>.delayed(const Duration(seconds: 2));
+    var report = await RingKit.diagnose();
+    debugPrint('DEADLINE_RINGING_DIAGNOSE $report');
+    final playing = report.ringTraces.where((trace) => trace.contains(id));
+    expect(
+      playing.any((trace) => trace.contains('audio state: Playing')),
+      isTrue,
+    );
+    expect(
+      playing.any((trace) => trace.contains('audio state: Stopped')),
+      isFalse,
+    );
+
+    // No call API polling: the native timeout must deliver the terminal event.
+    final deadline = DateTime.now().add(const Duration(seconds: 15));
+    while (!events.whereType<CallTimedOut>().any(
+          (event) => event.call.id == id,
+        ) &&
+        DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    expect(
+      events.whereType<CallTimedOut>().where((event) => event.call.id == id),
+      hasLength(1),
+    );
+    expect(
+      (await RingKit.activeCalls()).where((call) => call.id == id),
+      isEmpty,
+    );
+    report = await RingKit.diagnose();
+    debugPrint('DEADLINE_FINAL_DIAGNOSE $report');
+    // Terminal cleanup clears the ringing owner before its stop-state callback.
+    // Verify no remaining
+    // player/service/notification with the external ADB probe, not a stale trace.
+  });
 }

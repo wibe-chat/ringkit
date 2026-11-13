@@ -252,6 +252,12 @@ Start with the default ringtone. Add custom tones only after the baseline works;
 [resource/shrinking instructions](docs/INTEGRATION.md#7-customization) for `raw:` tones.
 Do not change `AudioManager.mode` or request DND-policy access as a ringtone workaround.
 
+When Telecom is enabled, the SDK delegates ringtone focus only after the specific call registers
+successfully; the trace then shows `focus_delegated`. Keep the same SDK in every app entry path
+and rebuild the host APK to receive this native behavior. A ringtone that starts and immediately
+logs `focus_loss_stop` needs the [focus troubleshooting checks](docs/TROUBLESHOOTING.md#silent-but-shown).
+Standalone and registration-fallback calls continue to manage their own focus.
+
 ### 4. Rebuild and install the actual host app
 
 Create a local/CI-only JSON file such as `config/ringkit-telemetry.local.json` (add it to the

@@ -15,6 +15,7 @@ import com.wibechat.ringkit.core.FakeTime
 import com.wibechat.ringkit.core.RingLog
 import com.wibechat.ringkit.core.TestSupport
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -25,6 +26,75 @@ import org.robolectric.RobolectricTestRunner
 class RingtonePlayerFallbackTest {
 
     private val context: Context = ApplicationProvider.getApplicationContext()
+
+    @Test
+    fun r37_live_telecom_owner_does_not_request_competing_audio_focus() {
+        val primary = FakeEngine("MediaPlayer")
+        val player = player(FakeBackend(primary = primary, ringtone = null),
+            focusOwnerFor = { RingFocusOwner.TELECOM })
+        val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+        val outcome = player.start(record("content://settings/system/ringtone"), null, false)
+
+        assertEquals("MediaPlayer", outcome.engine)
+        assertTrue(outcome.vibrating)
+        assertNull(shadowOf(manager).lastAudioFocusRequest,
+            "Telecom already owns focus; a second request is stopped by Telecom's ring focus")
+        player.stop()
+    }
+
+    @Test
+    fun r37_telecom_option_without_live_owner_keeps_independent_focus_loss_policy() {
+        val primary = FakeEngine("MediaPlayer")
+        val player = player(FakeBackend(primary = primary, ringtone = null))
+        val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val call = record("content://settings/system/ringtone")
+        player.start(call.copy(options = call.options.copy(useTelecom = true)), null, false)
+
+        shadowOf(manager).lastAudioFocusRequest.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS)
+
+        assertEquals(1, primary.stopCount)
+        assertTrue(shadowOf(player.vibrator()).isVibrating)
+        player.stop()
+        assertTrue(!shadowOf(player.vibrator()).isVibrating)
+    }
+
+    @Test
+    fun r37_suspended_telecom_owner_keeps_vibration_without_audio_or_focus() {
+        val backend = FakeBackend(primary = FakeEngine("MediaPlayer"), ringtone = null)
+        val player = player(backend, focusOwnerFor = { RingFocusOwner.TELECOM_SUSPENDED })
+        val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+        val outcome = player.start(record("content://settings/system/ringtone"), null, false)
+
+        assertTrue(backend.opened.isEmpty())
+        assertEquals("telecomInactive", outcome.resolution)
+        assertTrue(outcome.vibrating)
+        assertNull(shadowOf(manager).lastAudioFocusRequest)
+        player.stop()
+    }
+
+    @Test
+    fun r37_stale_focus_and_telecom_callbacks_cannot_stop_a_new_delegated_owner() {
+        val primary = FakeEngine("MediaPlayer")
+        val player = player(FakeBackend(primary = primary, ringtone = null),
+            focusOwnerFor = { if (it == "call-b") RingFocusOwner.TELECOM else RingFocusOwner.RINGKIT })
+        val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        player.start(record("content://settings/system/ringtone", "call-a"), null, false)
+        val oldRequest = shadowOf(manager).lastAudioFocusRequest
+        player.start(record("content://settings/system/ringtone", "call-b"), null, false)
+
+        oldRequest.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+        player.stopTelecomAudio("call-a", "scopeClosed")
+
+        assertEquals(1, primary.stopCount, "only replacement stopped call A")
+        assertTrue(oldRequest === shadowOf(manager).lastAudioFocusRequest)
+        player.stopTelecomAudio("call-b", "inactive")
+        assertEquals(2, primary.stopCount)
+        assertTrue(shadowOf(player.vibrator()).isVibrating)
+        player.stop()
+        assertTrue(!shadowOf(player.vibrator()).isVibrating)
+    }
 
     @Test
     fun asynchronous_primary_error_advances_once_to_ringtone() {
@@ -240,12 +310,14 @@ class RingtonePlayerFallbackTest {
         backend: RingPlaybackBackend,
         ringLog: RingLog = RingLog(TestSupport.newTempDir(), FakeTime()) { _, _ -> },
         scheduler: RingPlaybackScheduler = ManualScheduler(),
+        focusOwnerFor: (String) -> RingFocusOwner = { RingFocusOwner.RINGKIT },
     ): RingtonePlayer =
         RingtonePlayer(
             context = context,
             ringLog = ringLog,
             backend = backend,
             scheduler = scheduler,
+            focusOwnerFor = focusOwnerFor,
             dispatchPlayback = { it() },
         )
 
